@@ -1,0 +1,25 @@
+﻿# Build output
+/bin/
+/obj/
+
+# User-specific files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Visual Studio working folder
+.vs/
+
+# IIS Express folder
+.vscode/
+
+# Publish profiles
+Properties/PublishProfiles/
+
+# EF Migrations snapshot
+Migrations/*.Designer.cs
+
+# Optional: OS-specifične datoteke
+.DS_Store
+Thumbs.db
