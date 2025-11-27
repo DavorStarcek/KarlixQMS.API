@@ -3,6 +3,8 @@ using Microsoft.OpenApi.Models;
 using OpenIddict.Validation.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
+var env = builder.Environment;
+var isDev = env.IsDevelopment();
 
 // =========================
 // MVC API + Swagger
@@ -22,7 +24,7 @@ builder.Services.AddSwaggerGen(c =>
     var securityScheme = new OpenApiSecurityScheme
     {
         Name = "Authorization",
-        Description = "Unesi JWT token. Primjer: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9...",
+        Description = "Unesi JWT token. Primjer: Bearer eyJhbGciOi...",
         In = ParameterLocation.Header,
         Type = SecuritySchemeType.Http,
         Scheme = "bearer",
@@ -60,12 +62,20 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddOpenIddict()
     .AddValidation(options =>
     {
-        options.SetIssuer("https://localhost:7173/");
+        options.SetIssuer(isDev
+            ? "https://localhost:7173/"
+            : "https://id.karlix.eu/");
+
         options.UseSystemNetHttp();
         options.UseAspNetCore();
     });
 
 var app = builder.Build();
+
+if (isDev)
+{
+    app.UseDeveloperExceptionPage();
+}
 
 app.UseHttpsRedirection();
 
@@ -74,7 +84,7 @@ app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "Karlix QMS API v1");
-    c.RoutePrefix = string.Empty;
+    c.RoutePrefix = string.Empty; // https://host/ → swagger
 });
 
 app.UseRouting();
