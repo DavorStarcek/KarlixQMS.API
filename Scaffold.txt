@@ -1,0 +1,1 @@
+﻿dotnet ef dbcontext scaffold "Server=185.203.18.50;Database=KarlixQMS;User Id=sa;Password=PikVrbovec123!;TrustServerCertificate=True;" Microsoft.EntityFrameworkCore.SqlServer --context QmsDbContext --context-dir Data --output-dir Models/Tables --schema dbo --use-database-names --no-onconfiguring --force

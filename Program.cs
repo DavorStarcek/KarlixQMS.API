@@ -1,6 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authentication;
 using Microsoft.OpenApi.Models;
 using OpenIddict.Validation.AspNetCore;
+using Microsoft.EntityFrameworkCore;
+using KarlixQMS.API.Data;
+using KarlixQMS.API.Infrastructure;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -57,6 +61,19 @@ builder.Services.AddSwaggerGen(c =>
 
     c.AddSecurityRequirement(securityRequirement);
 });
+
+
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<ITenantContext, TenantContext>();
+
+builder.Services.AddDbContext<QmsDbContext>(opt =>
+{
+    opt.UseSqlServer(builder.Configuration.GetConnectionString("DefaultConnection"));
+});
+
+
+
+
 
 // =========================
 // OpenIddict validation – QMS.Api vjeruje KarlixID-u
