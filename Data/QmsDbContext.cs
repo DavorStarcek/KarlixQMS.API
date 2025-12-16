@@ -13,8 +13,6 @@ public partial class QmsDbContext : DbContext
     {
     }
 
-    public virtual DbSet<VwQmsActionOverview> VwQmsActionOverview { get; set; } = null!;
-
     public virtual DbSet<QmsAction> QmsActions { get; set; }
 
     public virtual DbSet<QmsActionType> QmsActionTypes { get; set; }
@@ -134,12 +132,6 @@ public partial class QmsDbContext : DbContext
             entity.Property(e => e.Description).HasMaxLength(500);
             entity.Property(e => e.IsActive).HasDefaultValue(true);
             entity.Property(e => e.Name).HasMaxLength(200);
-        });
-
-        modelBuilder.Entity<VwQmsActionOverview>(entity =>
-        {
-            entity.HasNoKey();
-            entity.ToView("vw_QmsActionOverview");
         });
 
 

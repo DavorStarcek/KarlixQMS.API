@@ -26,7 +26,7 @@ public class DashboardController : ControllerBase
     {
         var tenantId = _tenant.TenantId;
 
-        // 1) Summary (tenant-aware) – iz vw_QmsIssueList (ima TenantId)
+        // 1) Summary – vw_QmsIssueList
         var issueBase = _db.vw_QmsIssueLists
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId);
@@ -39,7 +39,7 @@ public class DashboardController : ControllerBase
         var closedIssues = await issueBase.CountAsync(x => x.StatusCode == "CLOSED");
         var cancelledIssues = await issueBase.CountAsync(x => x.StatusCode == "CANCELLED");
 
-        // 2) Actions summary (tenant-aware) – vw_QmsActionOverview (ima TenantId)
+        // 2) Actions summary – vw_QmsActionOverview
         var actionBase = _db.vw_QmsActionOverviews
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.IsActive == true);
@@ -48,7 +48,7 @@ public class DashboardController : ControllerBase
         var completedActions = await actionBase.CountAsync(x => x.CompletedDate != null);
         var evaluatedActions = await actionBase.CountAsync(x => x.VerificationDate != null);
 
-        // 3) Trend (tenant-aware) – vw_QmsIssueKpiMonthly (ima TenantId)
+        // 3) Trend – vw_QmsIssueKpiMonthly
         var trend = await _db.vw_QmsIssueKpiMonthlies
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId)
@@ -57,7 +57,7 @@ public class DashboardController : ControllerBase
             .Take(12)
             .ToListAsync();
 
-        // 4) Recent cases (tenant-aware) – vw_QmsIssueList
+        // 4) Recent cases – vw_QmsIssueList
         var recent = await _db.vw_QmsIssueLists
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId)
@@ -74,17 +74,14 @@ public class DashboardController : ControllerBase
             })
             .ToListAsync();
 
-        // 5) Open actions (tenant-aware) – vw_QmsActionOverview (TOP 10)
-        //    - samo aktivne
-        //    - samo nedovršene (CompletedDate == null)
-        //    - sortiranje: prvo s rokom, pa najbliži rok; bez roka na kraj
+        // 5) Open actions – vw_QmsActionOverview
         var today = DateTime.UtcNow.Date;
 
         var openActionsRaw = await _db.vw_QmsActionOverviews
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.IsActive == true)
             .Where(x => x.CompletedDate == null)
-            .OrderBy(x => x.DueDate == null) // false (ima rok) ide prvo
+            .OrderBy(x => x.DueDate == null) // prvo oni s rokom
             .ThenBy(x => x.DueDate)
             .Take(10)
             .Select(x => new
@@ -95,8 +92,7 @@ public class DashboardController : ControllerBase
                 x.ActionTitle,
                 x.ActionTypeName,
                 x.ResponsibleName,
-                x.DueDate,
-                x.CompletedDate
+                x.DueDate
             })
             .ToListAsync();
 
@@ -109,7 +105,7 @@ public class DashboardController : ControllerBase
 
             if (x.DueDate.HasValue)
             {
-                var due = x.DueDate.Value;
+                var due = x.DueDate.Value; // DateOnly
 
                 if (due < today)
                 {
@@ -121,13 +117,13 @@ public class DashboardController : ControllerBase
 
             return new
             {
-                x.ActionId,
+                ActionId = x.ActionId.ToString(),
                 x.IssueNumber,
                 x.EntityType,
                 x.ActionTitle,
                 x.ActionTypeName,
                 x.ResponsibleName,
-                x.DueDate,
+                DueDate = x.DueDate,
                 StatusCode = status,
                 DaysLate = daysLate
             };
