@@ -1,7 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
-using KarlixQMS.API.Models.Tables;
+﻿using KarlixQMS.API.Models.Tables;
+using KarlixQMS.API.Models.Views;
 using Microsoft.EntityFrameworkCore;
+using System;
+using System.Collections.Generic;
 
 namespace KarlixQMS.API.Data;
 
@@ -11,6 +12,8 @@ public partial class QmsDbContext : DbContext
         : base(options)
     {
     }
+
+    public virtual DbSet<VwQmsActionOverview> VwQmsActionOverview { get; set; } = null!;
 
     public virtual DbSet<QmsAction> QmsActions { get; set; }
 
@@ -132,6 +135,13 @@ public partial class QmsDbContext : DbContext
             entity.Property(e => e.IsActive).HasDefaultValue(true);
             entity.Property(e => e.Name).HasMaxLength(200);
         });
+
+        modelBuilder.Entity<VwQmsActionOverview>(entity =>
+        {
+            entity.HasNoKey();
+            entity.ToView("vw_QmsActionOverview");
+        });
+
 
         modelBuilder.Entity<QmsAttachment>(entity =>
         {

@@ -32,7 +32,10 @@ public class DashboardController : ControllerBase
             .Where(x => x.TenantId == tenantId);
 
         var totalIssues = await issueBase.CountAsync();
-        var openIssues = await issueBase.CountAsync(x => x.StatusCode != null && x.StatusCode != "CLOSED" && x.StatusCode != "CANCELLED");
+        var openIssues = await issueBase.CountAsync(x =>
+            x.StatusCode != null &&
+            x.StatusCode != "CLOSED" &&
+            x.StatusCode != "CANCELLED");
         var closedIssues = await issueBase.CountAsync(x => x.StatusCode == "CLOSED");
         var cancelledIssues = await issueBase.CountAsync(x => x.StatusCode == "CANCELLED");
 
@@ -71,6 +74,65 @@ public class DashboardController : ControllerBase
             })
             .ToListAsync();
 
+        // 5) Open actions (tenant-aware) – vw_QmsActionOverview (TOP 10)
+        //    - samo aktivne
+        //    - samo nedovršene (CompletedDate == null)
+        //    - sortiranje: prvo s rokom, pa najbliži rok; bez roka na kraj
+        var today = DateTime.UtcNow.Date;
+
+        var openActionsRaw = await _db.vw_QmsActionOverviews
+            .AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.IsActive == true)
+            .Where(x => x.CompletedDate == null)
+            .OrderBy(x => x.DueDate == null) // false (ima rok) ide prvo
+            .ThenBy(x => x.DueDate)
+            .Take(10)
+            .Select(x => new
+            {
+                x.ActionId,
+                x.IssueNumber,
+                x.EntityType,
+                x.ActionTitle,
+                x.ActionTypeName,
+                x.ResponsibleName,
+                x.DueDate,
+                x.CompletedDate
+            })
+            .ToListAsync();
+
+        var openActions = openActionsRaw.Select(x =>
+        {
+            var status = "IN_PROGRESS";
+            int? daysLate = null;
+
+            var today = DateOnly.FromDateTime(DateTime.UtcNow);
+
+            if (x.DueDate.HasValue)
+            {
+                var due = x.DueDate.Value;
+
+                if (due < today)
+                {
+                    status = "OVERDUE";
+                    daysLate = today.DayNumber - due.DayNumber;
+                }
+            }
+
+
+            return new
+            {
+                x.ActionId,
+                x.IssueNumber,
+                x.EntityType,
+                x.ActionTitle,
+                x.ActionTypeName,
+                x.ResponsibleName,
+                x.DueDate,
+                StatusCode = status,
+                DaysLate = daysLate
+            };
+        }).ToList();
+
         return Ok(new
         {
             TenantId = tenantId,
@@ -85,7 +147,8 @@ public class DashboardController : ControllerBase
                 EvaluatedActions = evaluatedActions
             },
             RecentCases = recent,
-            MonthlyTrend = trend
+            MonthlyTrend = trend,
+            OpenActions = openActions
         });
     }
 }
