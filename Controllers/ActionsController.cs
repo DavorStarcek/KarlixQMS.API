@@ -21,6 +21,7 @@ public class ActionsController : ControllerBase
         _tenant = tenant;
     }
 
+    // LISTA (kao što već imaš)
     [HttpGet]
     public async Task<IActionResult> Get(
         [FromQuery] bool openOnly = true,
@@ -50,7 +51,7 @@ public class ActionsController : ControllerBase
         }
 
         var items = await q
-            .OrderBy(x => x.DueDate == null)   // non-null prvo
+            .OrderBy(x => x.DueDate == null)
             .ThenBy(x => x.DueDate)
             .Take(Math.Clamp(take, 1, 1000))
             .Select(x => new
@@ -70,5 +71,51 @@ public class ActionsController : ControllerBase
             .ToListAsync();
 
         return Ok(items);
+    }
+
+    // DETAILS
+    // GET /api/actions/{id}
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetById([FromRoute] Guid id)
+    {
+        var tenantId = _tenant.TenantId;
+
+        // Primarno: vw_QmsActionList (ima sve što treba za UI)
+        var row = await _db.vw_QmsActionLists
+            .AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.Id == id)
+            .Select(x => new
+            {
+                ActionId = x.Id,
+                x.Title,
+                x.Description,
+
+                // referenca na "entity" (RIN/UN)
+                x.EntityType,
+                x.EntityId,
+                x.EntityNumber,
+                x.EntityTitle,
+
+                // rokovi / status
+                DueDate = x.DueDate.HasValue ? x.DueDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                CompletedDate = x.CompletedDate.HasValue ? x.CompletedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+
+                // odgovorni / OU
+                ResponsibleName = x.Responsible,
+                x.OrgUnitCode,
+                x.OrgUnitName,
+
+                // tip / učinkovitost
+                x.ActionTypeCode,
+                x.ActionTypeName,
+                x.EffectivenessCode,
+                x.EffectivenessName
+            })
+            .FirstOrDefaultAsync();
+
+        if (row == null)
+            return NotFound(new { Message = $"Action '{id}' nije pronađen." });
+
+        return Ok(row);
     }
 }
