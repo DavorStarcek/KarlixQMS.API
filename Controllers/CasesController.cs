@@ -25,6 +25,7 @@ public class CasesController : ControllerBase
     public async Task<IActionResult> Get(
         [FromQuery] string? type = null,        // COMPLAINT / NONCONFORMITY
         [FromQuery] string? status = null,      // open / closed / cancelled
+        [FromQuery] string? number = null,      // npr. RIN-2024-001
         [FromQuery] int? year = null,
         [FromQuery] int? month = null,
         [FromQuery] int? lastDays = null,       // npr. 30
@@ -39,6 +40,20 @@ public class CasesController : ControllerBase
         if (!string.IsNullOrWhiteSpace(type))
             q = q.Where(x => x.EntityType == type);
 
+        // 🔎 LIKE pretraga po broju slučaja (case-insensitive, neovisno o collationu baze)
+        if (!string.IsNullOrWhiteSpace(number))
+        {
+            var pattern = $"%{number.Trim().ToUpper()}%";
+
+            q = q.Where(x =>
+                EF.Functions.Like(
+                    EF.Functions.Collate(x.Number, "SQL_Latin1_General_CP1_CI_AS"),
+                    pattern
+                )
+            );
+        }
+
+
         if (!string.IsNullOrWhiteSpace(status))
         {
             switch (status.Trim().ToLowerInvariant())
@@ -48,9 +63,11 @@ public class CasesController : ControllerBase
                                      && x.StatusCode != "CLOSED"
                                      && x.StatusCode != "CANCELLED");
                     break;
+
                 case "closed":
                     q = q.Where(x => x.StatusCode == "CLOSED");
                     break;
+
                 case "cancelled":
                 case "canceled":
                     q = q.Where(x => x.StatusCode == "CANCELLED");
@@ -82,7 +99,6 @@ public class CasesController : ControllerBase
                 x.StatusCode,
                 x.StatusName,
                 IssueDate = x.IssueDate.ToDateTime(TimeOnly.MinValue)
-
             })
             .ToListAsync();
 
