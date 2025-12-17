@@ -21,12 +21,13 @@ public class ActionsController : ControllerBase
         _tenant = tenant;
     }
 
-    // LISTA (kao što već imaš)
+    // LISTA
     [HttpGet]
     public async Task<IActionResult> Get(
         [FromQuery] bool openOnly = true,
         [FromQuery] bool? overdue = null,
-        [FromQuery] string? type = null,     // COMPLAINT / NONCONFORMITY
+        [FromQuery] string? type = null,        // COMPLAINT / NONCONFORMITY
+        [FromQuery] string? caseNumber = null,  // npr. RIN-4191 / UN-123
         [FromQuery] int take = 200)
     {
         var tenantId = _tenant.TenantId;
@@ -41,6 +42,12 @@ public class ActionsController : ControllerBase
 
         if (!string.IsNullOrWhiteSpace(type))
             q = q.Where(x => x.EntityType == type);
+
+        if (!string.IsNullOrWhiteSpace(caseNumber))
+        {
+            var cn = caseNumber.Trim();
+            q = q.Where(x => x.IssueNumber == cn);
+        }
 
         if (overdue.HasValue)
         {
@@ -80,7 +87,6 @@ public class ActionsController : ControllerBase
     {
         var tenantId = _tenant.TenantId;
 
-        // Primarno: vw_QmsActionList (ima sve što treba za UI)
         var row = await _db.vw_QmsActionLists
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.Id == id)
@@ -90,22 +96,18 @@ public class ActionsController : ControllerBase
                 x.Title,
                 x.Description,
 
-                // referenca na "entity" (RIN/UN)
                 x.EntityType,
                 x.EntityId,
                 x.EntityNumber,
                 x.EntityTitle,
 
-                // rokovi / status
                 DueDate = x.DueDate.HasValue ? x.DueDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
                 CompletedDate = x.CompletedDate.HasValue ? x.CompletedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
 
-                // odgovorni / OU
                 ResponsibleName = x.Responsible,
                 x.OrgUnitCode,
                 x.OrgUnitName,
 
-                // tip / učinkovitost
                 x.ActionTypeCode,
                 x.ActionTypeName,
                 x.EffectivenessCode,
