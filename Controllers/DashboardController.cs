@@ -31,13 +31,17 @@ public class DashboardController : ControllerBase
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId);
 
-        var totalIssues = await issueBase.CountAsync();
-        var openIssues = await issueBase.CountAsync(x =>
-            x.StatusCode != null &&
-            x.StatusCode != "CLOSED" &&
-            x.StatusCode != "CANCELLED");
-        var closedIssues = await issueBase.CountAsync(x => x.StatusCode == "CLOSED");
-        var cancelledIssues = await issueBase.CountAsync(x => x.StatusCode == "CANCELLED");
+        var statusCounts = await issueBase
+        .GroupBy(x => x.StatusCode)
+        .Select(g => new { StatusCode = g.Key, Count = g.Count() })
+        .ToListAsync();
+
+        var totalIssues = statusCounts.Sum(x => x.Count);
+        var closedIssues = statusCounts.FirstOrDefault(x => x.StatusCode == "CLOSED")?.Count ?? 0;
+        var cancelledIssues = statusCounts.FirstOrDefault(x => x.StatusCode == "CANCELLED")?.Count ?? 0;
+
+        var openIssues = totalIssues - closedIssues - cancelledIssues; // ako ti je to definicija “open”
+
 
         // Pravi "zadnjih 30 dana" (IssueDate je DateOnly/DateOnly?)
         var from = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-30));
@@ -94,7 +98,8 @@ public class DashboardController : ControllerBase
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.IsActive == true)
             .Where(x => x.CompletedDate == null)
-            .OrderBy(x => x.DueDate) // (ako je nullable, nullovi će doći prvi; dovoljno za sada)
+            .OrderBy(x => x.DueDate == null)   // false(0) prije true(1) → non-null prije null
+            .ThenBy(x => x.DueDate)
             .Take(10)
             .Select(x => new
             {

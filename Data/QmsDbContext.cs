@@ -1,5 +1,4 @@
 ﻿using KarlixQMS.API.Models.Tables;
-using KarlixQMS.API.Models.Views;
 using Microsoft.EntityFrameworkCore;
 using System;
 using System.Collections.Generic;
