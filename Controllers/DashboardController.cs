@@ -26,7 +26,7 @@ public class DashboardController : ControllerBase
     {
         var tenantId = _tenant.TenantId;
 
-        // 1) Summary – vw_QmsIssueList
+        // 1) Issues base (tenant-aware) – vw_QmsIssueList
         var issueBase = _db.vw_QmsIssueLists
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId);
@@ -39,7 +39,18 @@ public class DashboardController : ControllerBase
         var closedIssues = await issueBase.CountAsync(x => x.StatusCode == "CLOSED");
         var cancelledIssues = await issueBase.CountAsync(x => x.StatusCode == "CANCELLED");
 
-        // 2) Actions summary – vw_QmsActionOverview
+        // Pravi "zadnjih 30 dana" (IssueDate je DateOnly/DateOnly?)
+        var from = DateOnly.FromDateTime(DateTime.UtcNow.Date.AddDays(-30));
+
+        var complaintsLast30Days = await issueBase.CountAsync(x =>
+            x.EntityType == "COMPLAINT" &&
+            x.IssueDate >= from);
+
+        var nonconformitiesLast30Days = await issueBase.CountAsync(x =>
+            x.EntityType == "NONCONFORMITY" &&
+            x.IssueDate >= from);
+
+        // 2) Actions summary (tenant-aware) – vw_QmsActionOverview
         var actionBase = _db.vw_QmsActionOverviews
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.IsActive == true);
@@ -48,7 +59,7 @@ public class DashboardController : ControllerBase
         var completedActions = await actionBase.CountAsync(x => x.CompletedDate != null);
         var evaluatedActions = await actionBase.CountAsync(x => x.VerificationDate != null);
 
-        // 3) Trend – vw_QmsIssueKpiMonthly
+        // 3) Trend – vw_QmsIssueKpiMonthly (zadnjih 12)
         var trend = await _db.vw_QmsIssueKpiMonthlies
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId)
@@ -57,7 +68,8 @@ public class DashboardController : ControllerBase
             .Take(12)
             .ToListAsync();
 
-        // 4) Recent cases – vw_QmsIssueList
+        // 4) Recent cases – vw_QmsIssueList (TOP 10)
+        //    Web ti očekuje DateTime?, pa pretvaramo DateOnly -> DateTime u Select.
         var recent = await _db.vw_QmsIssueLists
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId)
@@ -70,19 +82,19 @@ public class DashboardController : ControllerBase
                 x.Title,
                 x.StatusCode,
                 x.StatusName,
-                x.IssueDate
+                IssueDate = ((DateOnly?)x.IssueDate).HasValue
+                    ? ((DateOnly?)x.IssueDate)!.Value.ToDateTime(TimeOnly.MinValue)
+                    : (DateTime?)null
             })
             .ToListAsync();
 
-        // 5) Open actions – vw_QmsActionOverview
-        var today = DateTime.UtcNow.Date;
-
+        // 5) Open actions – vw_QmsActionOverview (TOP 10)
+        //    U Select uzmi DueDate kao DateOnly? pa ga kasnije pretvori u DateTime? za Web.
         var openActionsRaw = await _db.vw_QmsActionOverviews
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.IsActive == true)
             .Where(x => x.CompletedDate == null)
-            .OrderBy(x => x.DueDate == null) // prvo oni s rokom
-            .ThenBy(x => x.DueDate)
+            .OrderBy(x => x.DueDate) // (ako je nullable, nullovi će doći prvi; dovoljno za sada)
             .Take(10)
             .Select(x => new
             {
@@ -92,38 +104,34 @@ public class DashboardController : ControllerBase
                 x.ActionTitle,
                 x.ActionTypeName,
                 x.ResponsibleName,
-                x.DueDate
+                DueDate = (DateOnly?)x.DueDate
             })
             .ToListAsync();
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
         var openActions = openActionsRaw.Select(x =>
         {
             var status = "IN_PROGRESS";
             int? daysLate = null;
 
-            var today = DateOnly.FromDateTime(DateTime.UtcNow);
-
-            if (x.DueDate.HasValue)
+            if (x.DueDate.HasValue && x.DueDate.Value < today)
             {
-                var due = x.DueDate.Value; // DateOnly
-
-                if (due < today)
-                {
-                    status = "OVERDUE";
-                    daysLate = today.DayNumber - due.DayNumber;
-                }
+                status = "OVERDUE";
+                daysLate = today.DayNumber - x.DueDate.Value.DayNumber;
             }
-
 
             return new
             {
-                ActionId = x.ActionId.ToString(),
+                x.ActionId,
                 x.IssueNumber,
                 x.EntityType,
                 x.ActionTitle,
                 x.ActionTypeName,
                 x.ResponsibleName,
-                DueDate = x.DueDate,
+                DueDate = x.DueDate.HasValue
+                    ? x.DueDate.Value.ToDateTime(TimeOnly.MinValue)
+                    : (DateTime?)null,
                 StatusCode = status,
                 DaysLate = daysLate
             };
@@ -138,9 +146,13 @@ public class DashboardController : ControllerBase
                 OpenIssues = openIssues,
                 ClosedIssues = closedIssues,
                 CancelledIssues = cancelledIssues,
+
                 TotalActions = totalActions,
                 CompletedActions = completedActions,
-                EvaluatedActions = evaluatedActions
+                EvaluatedActions = evaluatedActions,
+
+                ComplaintsLast30Days = complaintsLast30Days,
+                NonconformitiesLast30Days = nonconformitiesLast30Days
             },
             RecentCases = recent,
             MonthlyTrend = trend,
