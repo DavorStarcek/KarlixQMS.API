@@ -21,13 +21,14 @@ public class ActionsController : ControllerBase
         _tenant = tenant;
     }
 
-    // LISTA
+    // LISTA (dashboard/open actions)
+    // GET /api/actions?openOnly=true&overdue=true&type=COMPLAINT&caseNumber=RIN-1234
     [HttpGet]
     public async Task<IActionResult> Get(
         [FromQuery] bool openOnly = true,
         [FromQuery] bool? overdue = null,
-        [FromQuery] string? type = null,        // COMPLAINT / NONCONFORMITY
-        [FromQuery] string? caseNumber = null,  // npr. RIN-4191 / UN-123
+        [FromQuery] string? type = null,       // COMPLAINT / NONCONFORMITY
+        [FromQuery] string? caseNumber = null, // IssueNumber (RIN-xxxx ili broj za UN)
         [FromQuery] int take = 200)
     {
         var tenantId = _tenant.TenantId;
@@ -43,10 +44,11 @@ public class ActionsController : ControllerBase
         if (!string.IsNullOrWhiteSpace(type))
             q = q.Where(x => x.EntityType == type);
 
+        // filter po broju slučaja (IssueNumber)
         if (!string.IsNullOrWhiteSpace(caseNumber))
         {
-            var cn = caseNumber.Trim();
-            q = q.Where(x => x.IssueNumber == cn);
+            var pattern = $"%{caseNumber.Trim()}%";
+            q = q.Where(x => x.IssueNumber != null && EF.Functions.Like(x.IssueNumber, pattern));
         }
 
         if (overdue.HasValue)
@@ -58,22 +60,34 @@ public class ActionsController : ControllerBase
         }
 
         var items = await q
-            .OrderBy(x => x.DueDate == null)
+            .OrderBy(x => x.DueDate == null)   // non-null prvo
             .ThenBy(x => x.DueDate)
             .Take(Math.Clamp(take, 1, 1000))
             .Select(x => new
             {
-                x.ActionId,
+                ActionId = x.ActionId,          // GUID (QmsIssueAction.Id)
+
                 x.IssueNumber,
                 x.EntityType,
                 x.ActionTitle,
                 x.ActionTypeName,
                 x.ResponsibleName,
+
                 DueDate = x.DueDate.HasValue
                     ? x.DueDate.Value.ToDateTime(TimeOnly.MinValue)
                     : (DateTime?)null,
-                StatusCode = (x.DueDate != null && x.DueDate < today) ? "OVERDUE" : "IN_PROGRESS",
-                DaysLate = (x.DueDate != null && x.DueDate < today) ? (today.DayNumber - x.DueDate.Value.DayNumber) : (int?)null
+
+                CompletedDate = x.CompletedDate.HasValue
+                    ? x.CompletedDate.Value.ToDateTime(TimeOnly.MinValue)
+                    : (DateTime?)null,
+
+                StatusCode = (x.CompletedDate == null && x.DueDate != null && x.DueDate < today)
+                    ? "OVERDUE"
+                    : "IN_PROGRESS",
+
+                DaysLate = (x.CompletedDate == null && x.DueDate != null && x.DueDate < today)
+                    ? (today.DayNumber - x.DueDate.Value.DayNumber)
+                    : (int?)null
             })
             .ToListAsync();
 
@@ -82,41 +96,49 @@ public class ActionsController : ControllerBase
 
     // DETAILS
     // GET /api/actions/{id}
+    // id = QmsIssueAction.Id (ActionId iz vw_QmsActionOverview)
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById([FromRoute] Guid id)
     {
         var tenantId = _tenant.TenantId;
 
-        var row = await _db.vw_QmsActionLists
+        var row = await _db.vw_QmsActionOverviews
             .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.Id == id)
+            .Where(x => x.TenantId == tenantId && x.ActionId == id && x.IsActive == true)
             .Select(x => new
             {
-                ActionId = x.Id,
-                x.Title,
-                x.Description,
+                ActionId = x.ActionId,
 
-                x.EntityType,
-                x.EntityId,
-                x.EntityNumber,
-                x.EntityTitle,
+                Title = x.ActionTitle,
+                Description = x.ActionDescription,
 
-                DueDate = x.DueDate.HasValue ? x.DueDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
-                CompletedDate = x.CompletedDate.HasValue ? x.CompletedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                EntityType = x.EntityType,
+                EntityNumber = x.IssueNumber,
+                EntityTitle = x.IssueTitle,
 
-                ResponsibleName = x.Responsible,
-                x.OrgUnitCode,
-                x.OrgUnitName,
+                DueDate = x.DueDate.HasValue
+                    ? x.DueDate.Value.ToDateTime(TimeOnly.MinValue)
+                    : (DateTime?)null,
 
-                x.ActionTypeCode,
-                x.ActionTypeName,
-                x.EffectivenessCode,
-                x.EffectivenessName
+                CompletedDate = x.CompletedDate.HasValue
+                    ? x.CompletedDate.Value.ToDateTime(TimeOnly.MinValue)
+                    : (DateTime?)null,
+
+                ResponsibleName = x.ResponsibleName,
+
+                OrgUnitCode = (string?)null, // nema u vw_QmsActionOverview (možemo dodati u view ako želiš)
+                OrgUnitName = x.ResponsibleOrgUnitName,
+
+                ActionTypeCode = x.ActionTypeCode,
+                ActionTypeName = x.ActionTypeName,
+
+                EffectivenessCode = x.EffectivenessCode,
+                EffectivenessName = x.EffectivenessName
             })
             .FirstOrDefaultAsync();
 
         if (row == null)
-            return NotFound(new { Message = $"Action '{id}' nije pronađen." });
+            return NotFound(new { Message = $"Action '{id}' nije pronađena." });
 
         return Ok(row);
     }
