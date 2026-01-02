@@ -9,13 +9,13 @@ public partial class vw_QmsActionOverview
 
     public Guid? IssueId { get; set; }
 
-    public string? EntityType { get; set; }
+    public string EntityType { get; set; } = null!;
 
-    public string IssueNumber { get; set; } = null!;
+    public string? IssueNumber { get; set; }
 
     public string? IssueTitle { get; set; }
 
-    public DateOnly IssueDate { get; set; }
+    public DateOnly? IssueDate { get; set; }
 
     public string? ActionTitle { get; set; }
 

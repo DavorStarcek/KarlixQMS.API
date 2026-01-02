@@ -668,7 +668,7 @@ public partial class QmsDbContext : DbContext
             entity.Property(e => e.ActionTypeName).HasMaxLength(200);
             entity.Property(e => e.EffectivenessCode).HasMaxLength(50);
             entity.Property(e => e.EffectivenessName).HasMaxLength(200);
-            entity.Property(e => e.EntityType).HasMaxLength(20);
+            entity.Property(e => e.EntityType).HasMaxLength(50);
             entity.Property(e => e.IssueNumber).HasMaxLength(50);
             entity.Property(e => e.IssueStatusCode).HasMaxLength(50);
             entity.Property(e => e.IssueStatusName).HasMaxLength(200);
