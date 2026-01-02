@@ -1,7 +1,7 @@
-﻿using KarlixQMS.API.Models.Tables;
-using Microsoft.EntityFrameworkCore;
-using System;
+﻿using System;
 using System.Collections.Generic;
+using KarlixQMS.API.Models.Tables;
+using Microsoft.EntityFrameworkCore;
 
 namespace KarlixQMS.API.Data;
 
@@ -132,7 +132,6 @@ public partial class QmsDbContext : DbContext
             entity.Property(e => e.IsActive).HasDefaultValue(true);
             entity.Property(e => e.Name).HasMaxLength(200);
         });
-
 
         modelBuilder.Entity<QmsAttachment>(entity =>
         {
@@ -675,6 +674,7 @@ public partial class QmsDbContext : DbContext
             entity.Property(e => e.IssueStatusName).HasMaxLength(200);
             entity.Property(e => e.IssueTitle).HasMaxLength(500);
             entity.Property(e => e.ResponsibleName).HasMaxLength(200);
+            entity.Property(e => e.ResponsibleOrgUnitCode).HasMaxLength(50);
             entity.Property(e => e.ResponsibleOrgUnitName).HasMaxLength(200);
         });
 

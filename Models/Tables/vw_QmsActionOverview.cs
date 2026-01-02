@@ -29,6 +29,8 @@ public partial class vw_QmsActionOverview
 
     public Guid? ResponsibleOrgUnitId { get; set; }
 
+    public string? ResponsibleOrgUnitCode { get; set; }
+
     public string? ResponsibleOrgUnitName { get; set; }
 
     public DateOnly? DueDate { get; set; }
