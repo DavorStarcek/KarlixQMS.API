@@ -27,8 +27,8 @@ public class ActionsController : ControllerBase
     public async Task<IActionResult> Get(
         [FromQuery] bool openOnly = true,
         [FromQuery] bool? overdue = null,
-        [FromQuery] string? type = null,       // COMPLAINT / NONCONFORMITY
-        [FromQuery] string? caseNumber = null, // IssueNumber (RIN-xxxx ili broj za UN)
+        [FromQuery] string? type = null,        // COMPLAINT / NONCONFORMITY
+        [FromQuery] string? caseNumber = null,  // IssueNumber (RIN-xxxx ili broj za UN)
         [FromQuery] int take = 200)
     {
         var tenantId = _tenant.TenantId;
@@ -60,12 +60,12 @@ public class ActionsController : ControllerBase
         }
 
         var items = await q
-            .OrderBy(x => x.DueDate == null)   // non-null prvo
+            .OrderBy(x => x.DueDate == null) // non-null prvo
             .ThenBy(x => x.DueDate)
             .Take(Math.Clamp(take, 1, 1000))
             .Select(x => new
             {
-                ActionId = x.ActionId,          // GUID (QmsIssueAction.Id)
+                ActionId = x.ActionId, // Guid
 
                 x.IssueNumber,
                 x.EntityType,
@@ -96,24 +96,24 @@ public class ActionsController : ControllerBase
 
     // DETAILS
     // GET /api/actions/{id}
-    // id = QmsIssueAction.Id (ActionId iz vw_QmsActionOverview)
+    // id = QmsIssueAction.Id
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById([FromRoute] Guid id)
     {
         var tenantId = _tenant.TenantId;
 
-        var row = await _db.vw_QmsActionOverviews
+        var row = await _db.vw_QmsIssue_Actions
             .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.ActionId == id && x.IsActive == true)
+            .Where(x => x.TenantId == tenantId && x.Id == id)
             .Select(x => new
             {
-                ActionId = x.ActionId,
+                ActionId = x.Id,
 
                 Title = x.ActionTitle,
                 Description = x.ActionDescription,
 
-                EntityType = x.EntityType,
-                EntityNumber = x.IssueNumber,
+                EntityType = x.IssueKind,      // COMPLAINT / NONCONFORMITY
+                EntityNumber = x.IssueNumber,  // RIN-xxxx / UN-xxxx
                 EntityTitle = x.IssueTitle,
 
                 DueDate = x.DueDate.HasValue
@@ -126,14 +126,25 @@ public class ActionsController : ControllerBase
 
                 ResponsibleName = x.ResponsibleName,
 
-                OrgUnitCode = (string?)null, // nema u vw_QmsActionOverview (možemo dodati u view ako želiš)
+                OrgUnitCode = x.ResponsibleOrgUnitCode,
                 OrgUnitName = x.ResponsibleOrgUnitName,
 
                 ActionTypeCode = x.ActionTypeCode,
                 ActionTypeName = x.ActionTypeName,
 
                 EffectivenessCode = x.EffectivenessCode,
-                EffectivenessName = x.EffectivenessName
+                EffectivenessName = x.EffectivenessName,
+
+                VerificationDate = x.VerificationDate.HasValue
+                    ? x.VerificationDate.Value.ToDateTime(TimeOnly.MinValue)
+                    : (DateTime?)null,
+
+                VerificationNotes = x.VerificationNotes,
+
+                CreatedAt = x.CreatedAt,
+                UpdatedAt = x.UpdatedAt,
+
+                IsDeleted = x.IsDeleted
             })
             .FirstOrDefaultAsync();
 
@@ -142,4 +153,5 @@ public class ActionsController : ControllerBase
 
         return Ok(row);
     }
+
 }
