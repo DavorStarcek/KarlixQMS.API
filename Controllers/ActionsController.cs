@@ -73,6 +73,10 @@ public class ActionsController : ControllerBase
                 x.ActionTypeName,
                 x.ResponsibleName,
 
+                // ✅ NOVO (ako želiš prikaz i u listi / tooltip / kasnije)
+                ResponsibleOrgUnitCode = x.ResponsibleOrgUnitCode,
+                ResponsibleOrgUnitName = x.ResponsibleOrgUnitName,
+
                 DueDate = x.DueDate.HasValue
                     ? x.DueDate.Value.ToDateTime(TimeOnly.MinValue)
                     : (DateTime?)null,
@@ -96,23 +100,25 @@ public class ActionsController : ControllerBase
 
     // DETAILS
     // GET /api/actions/{id}
-    // id = QmsIssueAction.Id
+    // id = QmsIssueAction.Id (ActionId iz vw_QmsActionOverview)
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById([FromRoute] Guid id)
     {
         var tenantId = _tenant.TenantId;
 
-        var row = await _db.vw_QmsIssue_Actions
+        // ✅ Preporuka: čitaj iz vw_QmsActionOverview (jer UI koristi QmsIssueAction.Id)
+        // i zato što sada imaš i ResponsibleOrgUnitCode u view-u.
+        var row = await _db.vw_QmsActionOverviews
             .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.Id == id)
+            .Where(x => x.TenantId == tenantId && x.ActionId == id && x.IsActive == true)
             .Select(x => new
             {
-                ActionId = x.Id,
+                ActionId = x.ActionId,
 
                 Title = x.ActionTitle,
                 Description = x.ActionDescription,
 
-                EntityType = x.IssueKind,      // COMPLAINT / NONCONFORMITY
+                EntityType = x.EntityType,     // COMPLAINT / NONCONFORMITY
                 EntityNumber = x.IssueNumber,  // RIN-xxxx / UN-xxxx
                 EntityTitle = x.IssueTitle,
 
@@ -126,6 +132,7 @@ public class ActionsController : ControllerBase
 
                 ResponsibleName = x.ResponsibleName,
 
+                // ✅ SADA POPUNJENO (ne null)
                 OrgUnitCode = x.ResponsibleOrgUnitCode,
                 OrgUnitName = x.ResponsibleOrgUnitName,
 
@@ -139,12 +146,7 @@ public class ActionsController : ControllerBase
                     ? x.VerificationDate.Value.ToDateTime(TimeOnly.MinValue)
                     : (DateTime?)null,
 
-                VerificationNotes = x.VerificationNotes,
-
-                CreatedAt = x.CreatedAt,
-                UpdatedAt = x.UpdatedAt,
-
-                IsDeleted = x.IsDeleted
+                VerificationNotes = x.VerificationNotes
             })
             .FirstOrDefaultAsync();
 
@@ -153,5 +155,4 @@ public class ActionsController : ControllerBase
 
         return Ok(row);
     }
-
 }
