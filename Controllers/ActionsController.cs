@@ -85,9 +85,6 @@ public class ActionsController : ControllerBase
                 CompletedDate = x.CompletedDate.HasValue ? x.CompletedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
                 VerificationDate = x.VerificationDate.HasValue ? x.VerificationDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
 
-                // Status za listu:
-                // - ako je awaitingVerification=true, status je "AWAITING_VERIFICATION"
-                // - inače: OVERDUE / IN_PROGRESS / DONE
                 StatusCode =
                     awaitingVerification ? "AWAITING_VERIFICATION" :
                     (x.CompletedDate != null) ? "DONE" :
@@ -148,5 +145,98 @@ public class ActionsController : ControllerBase
             return NotFound(new { Message = $"Action '{id}' nije pronađena." });
 
         return Ok(row);
+    }
+
+    public sealed class ActionUpdateDto
+    {
+        public string? Title { get; set; }
+        public string? Description { get; set; }
+
+        public DateTime? DueDate { get; set; }
+        public DateTime? CompletedDate { get; set; }
+
+        public string? ResponsibleName { get; set; }
+        public Guid? ResponsibleOrgUnitId { get; set; }
+
+        public Guid? ActionTypeId { get; set; } // UI šalje Guid? (select može biti prazno)
+        public Guid? EffectivenessId { get; set; }
+
+        public DateTime? VerificationDate { get; set; }
+        public string? VerificationNotes { get; set; }
+    }
+
+    // UPDATE
+    // PUT /api/actions/{id}
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update([FromRoute] Guid id, [FromBody] ActionUpdateDto dto)
+    {
+        var tenantId = _tenant.TenantId;
+
+        var action = await _db.QmsIssueActions
+            .FirstOrDefaultAsync(x =>
+                x.TenantId == tenantId &&
+                x.Id == id &&
+                x.IsActive == true &&
+                x.IsDeleted == false);
+
+        if (action == null)
+            return NotFound(new { Message = $"Action '{id}' nije pronađena." });
+
+        // ---- VALIDACIJE ----
+        var title = (dto.Title ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(title))
+            return BadRequest(new { Message = "Title je obavezan." });
+
+        if (!dto.ActionTypeId.HasValue)
+            return BadRequest(new { Message = "ActionTypeId je obavezan." });
+
+        // workflow: verifikacija tek nakon completed
+        if (dto.VerificationDate.HasValue && !dto.CompletedDate.HasValue)
+            return BadRequest(new { Message = "Verifikacija je moguća tek kad je radnja završena (CompletedDate)." });
+
+        // Ako CompletedDate NEMA, očisti verification + effectiveness (da ne ostane “verificirano” na otvorenoj radnji)
+        var completedDateOnly = dto.CompletedDate.HasValue
+            ? DateOnly.FromDateTime(dto.CompletedDate.Value)
+            : (DateOnly?)null;
+
+        // ---- MAPIRANJE ----
+        action.Title = title;
+
+        // Description u bazi je NOT NULL:
+        action.Description = dto.Description ?? "";
+
+        action.DueDate = dto.DueDate.HasValue
+            ? DateOnly.FromDateTime(dto.DueDate.Value)
+            : (DateOnly?)null;
+
+        action.CompletedDate = completedDateOnly;
+
+        action.ResponsibleName = dto.ResponsibleName;
+        action.ResponsibleOrgUnitId = dto.ResponsibleOrgUnitId;
+
+        // ActionTypeId u bazi je NOT NULL:
+        action.ActionTypeId = dto.ActionTypeId.Value;
+
+        if (completedDateOnly == null)
+        {
+            action.EffectivenessId = null;
+            action.VerificationDate = null;
+            action.VerificationNotes = null;
+        }
+        else
+        {
+            action.EffectivenessId = dto.EffectivenessId;
+
+            action.VerificationDate = dto.VerificationDate.HasValue
+                ? DateOnly.FromDateTime(dto.VerificationDate.Value)
+                : (DateOnly?)null;
+
+            action.VerificationNotes = dto.VerificationNotes;
+        }
+
+        action.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+        return NoContent(); // 204
     }
 }
