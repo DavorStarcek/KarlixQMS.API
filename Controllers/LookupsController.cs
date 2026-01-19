@@ -83,4 +83,34 @@ public class LookupsController : ControllerBase
 
         return Ok(items);
     }
+
+    [HttpGet("workflow-statuses")]
+    public async Task<IActionResult> GetWorkflowStatuses([FromQuery] string? entityType = null)
+    {
+        var tenantId = _tenant.TenantId;
+
+        var q = _db.QmsWorkflowStatuses
+            .AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.IsActive == true);
+
+        if (!string.IsNullOrWhiteSpace(entityType))
+            q = q.Where(x => x.EntityType == entityType);
+
+        var items = await q
+            .OrderBy(x => x.EntityType)
+            .ThenBy(x => x.DisplayOrder)
+            .ThenBy(x => x.Name)
+            .Select(x => new
+            {
+                x.EntityType,
+                x.Code,
+                x.Name,
+                x.Description,
+                x.DisplayOrder
+            })
+            .ToListAsync();
+
+        return Ok(items);
+    }
+
 }

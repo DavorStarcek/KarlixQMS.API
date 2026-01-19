@@ -21,15 +21,86 @@ public class ActionsController : ControllerBase
         _tenant = tenant;
     }
 
+    // ----------------------------
+    // DTOs (stabilni contract)
+    // ----------------------------
+
+    public sealed class ActionListItemDto
+    {
+        public Guid ActionId { get; set; }
+        public string? IssueNumber { get; set; }
+        public string? EntityType { get; set; }
+
+        public string? ActionTitle { get; set; }
+        public string? ActionTypeName { get; set; }
+        public string? ResponsibleName { get; set; }
+
+        public DateTime? DueDate { get; set; }
+        public DateTime? CompletedDate { get; set; }
+        public DateTime? VerificationDate { get; set; }
+
+        public string? StatusCode { get; set; }
+        public int? DaysLate { get; set; }
+    }
+
+    public sealed class ActionDetailsDto
+    {
+        public Guid ActionId { get; set; }
+        public string? Title { get; set; }
+        public string? Description { get; set; }
+
+        public string? EntityType { get; set; }
+        public string? EntityNumber { get; set; }
+        public string? EntityTitle { get; set; }
+
+        public DateTime? DueDate { get; set; }
+        public DateTime? CompletedDate { get; set; }
+
+        public string? ResponsibleName { get; set; }
+
+        public Guid? ResponsibleOrgUnitId { get; set; }
+        public string? OrgUnitCode { get; set; }
+        public string? OrgUnitName { get; set; }
+
+        public string? ActionTypeCode { get; set; }
+        public string? ActionTypeName { get; set; }
+
+        public string? EffectivenessCode { get; set; }
+        public string? EffectivenessName { get; set; }
+
+        public DateTime? VerificationDate { get; set; }
+        public string? VerificationNotes { get; set; }
+    }
+
+    public sealed class ActionUpdateDto
+    {
+        public string? Title { get; set; }
+        public string? Description { get; set; }
+
+        public DateTime? DueDate { get; set; }
+        public DateTime? CompletedDate { get; set; }
+
+        public string? ResponsibleName { get; set; }
+        public Guid? ResponsibleOrgUnitId { get; set; }
+
+        public Guid? ActionTypeId { get; set; } // UI šalje Guid? (select može biti prazno)
+        public Guid? EffectivenessId { get; set; }
+
+        public DateTime? VerificationDate { get; set; }
+        public string? VerificationNotes { get; set; }
+    }
+
+    // ----------------------------
     // LISTA
     // GET /api/actions?openOnly=true&overdue=true&type=COMPLAINT&caseNumber=RIN-1234&awaitingVerification=true
+    // ----------------------------
     [HttpGet]
-    public async Task<IActionResult> Get(
+    public async Task<ActionResult<List<ActionListItemDto>>> Get(
         [FromQuery] bool openOnly = true,
         [FromQuery] bool? overdue = null,
         [FromQuery] bool awaitingVerification = false,
-        [FromQuery] string? type = null,      // COMPLAINT / NONCONFORMITY
-        [FromQuery] string? caseNumber = null,// IssueNumber (RIN-xxxx / UN-xxxx)
+        [FromQuery] string? type = null,       // COMPLAINT / NONCONFORMITY
+        [FromQuery] string? caseNumber = null, // IssueNumber (RIN-xxxx / UN-xxxx)
         [FromQuery] int take = 200)
     {
         var tenantId = _tenant.TenantId;
@@ -72,11 +143,12 @@ public class ActionsController : ControllerBase
             .OrderBy(x => x.DueDate == null)  // non-null prvo
             .ThenBy(x => x.DueDate)
             .Take(Math.Clamp(take, 1, 1000))
-            .Select(x => new
+            .Select(x => new ActionListItemDto
             {
                 ActionId = x.ActionId,
-                x.IssueNumber,
-                x.EntityType,
+                IssueNumber = x.IssueNumber,
+                EntityType = x.EntityType,
+
                 ActionTitle = x.ActionTitle,
                 ActionTypeName = x.ActionTypeName,
                 ResponsibleName = x.ResponsibleName,
@@ -101,17 +173,19 @@ public class ActionsController : ControllerBase
         return Ok(items);
     }
 
+    // ----------------------------
     // DETAILS
     // GET /api/actions/{id}
+    // ----------------------------
     [HttpGet("{id:guid}")]
-    public async Task<IActionResult> GetById([FromRoute] Guid id)
+    public async Task<ActionResult<ActionDetailsDto>> GetById([FromRoute] Guid id)
     {
         var tenantId = _tenant.TenantId;
 
         var row = await _db.vw_QmsActionOverviews
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.ActionId == id && x.IsActive == true)
-            .Select(x => new
+            .Select(x => new ActionDetailsDto
             {
                 ActionId = x.ActionId,
                 Title = x.ActionTitle,
@@ -147,26 +221,10 @@ public class ActionsController : ControllerBase
         return Ok(row);
     }
 
-    public sealed class ActionUpdateDto
-    {
-        public string? Title { get; set; }
-        public string? Description { get; set; }
-
-        public DateTime? DueDate { get; set; }
-        public DateTime? CompletedDate { get; set; }
-
-        public string? ResponsibleName { get; set; }
-        public Guid? ResponsibleOrgUnitId { get; set; }
-
-        public Guid? ActionTypeId { get; set; } // UI šalje Guid? (select može biti prazno)
-        public Guid? EffectivenessId { get; set; }
-
-        public DateTime? VerificationDate { get; set; }
-        public string? VerificationNotes { get; set; }
-    }
-
+    // ----------------------------
     // UPDATE
     // PUT /api/actions/{id}
+    // ----------------------------
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update([FromRoute] Guid id, [FromBody] ActionUpdateDto dto)
     {
@@ -194,7 +252,6 @@ public class ActionsController : ControllerBase
         if (dto.VerificationDate.HasValue && !dto.CompletedDate.HasValue)
             return BadRequest(new { Message = "Verifikacija je moguća tek kad je radnja završena (CompletedDate)." });
 
-        // Ako CompletedDate NEMA, očisti verification + effectiveness (da ne ostane “verificirano” na otvorenoj radnji)
         var completedDateOnly = dto.CompletedDate.HasValue
             ? DateOnly.FromDateTime(dto.CompletedDate.Value)
             : (DateOnly?)null;
@@ -219,6 +276,7 @@ public class ActionsController : ControllerBase
 
         if (completedDateOnly == null)
         {
+            // ako se “un-complete”, očisti verifikaciju/učinkovitost
             action.EffectivenessId = null;
             action.VerificationDate = null;
             action.VerificationNotes = null;

@@ -21,153 +21,183 @@ public class CasesController : ControllerBase
         _tenant = tenant;
     }
 
-    // LISTA
+    // ----------------------------
+    // DTOs
+    // ----------------------------
+    public sealed class CaseListItemDto
+    {
+        public Guid EntityId { get; set; }
+        public string Number { get; set; } = null!;
+        public string? EntityType { get; set; }
+        public string? Title { get; set; }
+
+        public DateTime IssueDate { get; set; }
+        public DateTime? ReceivedDate { get; set; }
+
+        public string? CustomerName { get; set; }
+        public Guid? OrgUnitId { get; set; }
+
+        public string? StatusCode { get; set; }
+        public string? StatusName { get; set; }
+    }
+
+    public sealed class CaseDetailsDto
+    {
+        // header
+        public Guid EntityId { get; set; }
+        public string Number { get; set; } = null!;
+        public string? EntityType { get; set; }
+        public string? Title { get; set; }
+
+        public DateTime IssueDate { get; set; }
+        public DateTime? ReceivedDate { get; set; }
+
+        public string? CustomerName { get; set; }
+        public Guid? OrgUnitId { get; set; }
+
+        public Guid WorkflowStatusId { get; set; }
+        public string? StatusCode { get; set; }
+        public string? StatusName { get; set; }
+
+        // actions (iz vw_QmsIssue_Actions)
+        public List<CaseActionDto> Actions { get; set; } = new();
+    }
+
+    public sealed class CaseActionDto
+    {
+        public Guid ActionId { get; set; }
+        public string? ActionTitle { get; set; }
+        public string? ActionTypeName { get; set; }
+        public string? ResponsibleName { get; set; }
+
+        public DateTime? DueDate { get; set; }
+        public DateTime? CompletedDate { get; set; }
+        public DateTime? VerificationDate { get; set; }
+
+        public string? EffectivenessCode { get; set; }
+        public string? EffectivenessName { get; set; }
+    }
+
+    // ----------------------------
+    // LIST
+    // GET /api/cases?type=COMPLAINT&status=OPEN&q=rin&take=200
+    // ----------------------------
     [HttpGet]
-    public async Task<IActionResult> Get(
-        [FromQuery] string? type = null,        // COMPLAINT / NONCONFORMITY
-        [FromQuery] string? status = null,      // open / closed / cancelled
-        [FromQuery] string? number = null,      // LIKE pretraga po broju
-        [FromQuery] int? year = null,
-        [FromQuery] int? month = null,
-        [FromQuery] int? lastDays = null,       // npr. 30
+    public async Task<ActionResult<List<CaseListItemDto>>> Get(
+        [FromQuery] string? type = null,     // COMPLAINT / NONCONFORMITY
+        [FromQuery] string? status = null,   // StatusCode iz vw
+        [FromQuery] string? q = null,        // search
         [FromQuery] int take = 200)
     {
         var tenantId = _tenant.TenantId;
 
-        var q = _db.vw_QmsIssueLists
+        var query = _db.vw_QmsIssueLists
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId);
 
         if (!string.IsNullOrWhiteSpace(type))
-            q = q.Where(x => x.EntityType == type);
-
-        if (!string.IsNullOrWhiteSpace(number))
-        {
-            var pattern = $"%{number.Trim()}%";
-            q = q.Where(x => EF.Functions.Like(x.Number, pattern));
-        }
+            query = query.Where(x => x.EntityType == type);
 
         if (!string.IsNullOrWhiteSpace(status))
+            query = query.Where(x => x.StatusCode == status);
+
+        if (!string.IsNullOrWhiteSpace(q))
         {
-            switch (status.Trim().ToLowerInvariant())
-            {
-                case "open":
-                    q = q.Where(x => x.StatusCode != null
-                                     && x.StatusCode != "CLOSED"
-                                     && x.StatusCode != "CANCELLED");
-                    break;
-                case "closed":
-                    q = q.Where(x => x.StatusCode == "CLOSED");
-                    break;
-                case "cancelled":
-                case "canceled":
-                    q = q.Where(x => x.StatusCode == "CANCELLED");
-                    break;
-            }
+            var term = q.Trim();
+            var pattern = $"%{term}%";
+            query = query.Where(x =>
+                EF.Functions.Like(x.Number, pattern) ||
+                (x.Title != null && EF.Functions.Like(x.Title, pattern)) ||
+                (x.CustomerName != null && EF.Functions.Like(x.CustomerName, pattern)));
         }
 
-        if (year.HasValue && month.HasValue && month.Value is >= 1 and <= 12)
-        {
-            var from = new DateOnly(year.Value, month.Value, 1);
-            var to = from.AddMonths(1);
-            q = q.Where(x => x.IssueDate >= from && x.IssueDate < to);
-        }
-
-        if (lastDays.HasValue && lastDays.Value > 0)
-        {
-            var from = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-lastDays.Value));
-            q = q.Where(x => x.IssueDate >= from);
-        }
-
-        var items = await q
+        var items = await query
             .OrderByDescending(x => x.IssueDate)
+            .ThenBy(x => x.Number)
             .Take(Math.Clamp(take, 1, 1000))
-            .Select(x => new
+            .Select(x => new CaseListItemDto
             {
-                x.Number,
-                x.EntityType,
-                x.Title,
-                x.StatusCode,
-                x.StatusName,
-                IssueDate = x.IssueDate.ToDateTime(TimeOnly.MinValue)
+                EntityId = x.EntityId,
+                Number = x.Number,
+                EntityType = x.EntityType,
+                Title = x.Title,
+
+                IssueDate = x.IssueDate.ToDateTime(TimeOnly.MinValue),
+                ReceivedDate = x.ReceivedDate.HasValue ? x.ReceivedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+
+                CustomerName = x.CustomerName,
+                OrgUnitId = x.OrgUnitId,
+
+                StatusCode = x.StatusCode,
+                StatusName = x.StatusName
             })
             .ToListAsync();
 
         return Ok(items);
     }
 
-    // DETAILS (HEADER)
+    // ----------------------------
+    // DETAILS by number
+    // GET /api/cases/{number}
+    // ----------------------------
     [HttpGet("{number}")]
-    public async Task<IActionResult> GetByNumber([FromRoute] string number)
+    public async Task<ActionResult<CaseDetailsDto>> GetByNumber([FromRoute] string number)
     {
         var tenantId = _tenant.TenantId;
+        var n = (number ?? "").Trim();
 
-        var item = await _db.vw_QmsIssueLists
+        if (string.IsNullOrWhiteSpace(n))
+            return BadRequest(new { Message = "Number je obavezan." });
+
+        var header = await _db.vw_QmsIssueLists
             .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.Number == number)
-            .Select(x => new
+            .Where(x => x.TenantId == tenantId && x.Number == n)
+            .Select(x => new CaseDetailsDto
             {
-                x.Number,
-                x.EntityType,
-                x.Title,
-                x.StatusCode,
-                x.StatusName,
+                EntityId = x.EntityId,
+                Number = x.Number,
+                EntityType = x.EntityType,
+                Title = x.Title,
+
                 IssueDate = x.IssueDate.ToDateTime(TimeOnly.MinValue),
-                x.CustomerName
+                ReceivedDate = x.ReceivedDate.HasValue ? x.ReceivedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+
+                CustomerName = x.CustomerName,
+                OrgUnitId = x.OrgUnitId,
+
+                WorkflowStatusId = x.WorkflowStatusId,
+                StatusCode = x.StatusCode,
+                StatusName = x.StatusName
             })
             .FirstOrDefaultAsync();
 
-        if (item == null)
-            return NotFound(new { Message = $"Case '{number}' nije pronađen." });
+        if (header == null)
+            return NotFound(new { Message = $"Case '{n}' nije pronađen." });
 
-        return Ok(item);
-    }
-
-    // DETAILS (ACTIONS)
-    // GET /api/cases/{number}/actions
-    [HttpGet("{number}/actions")]
-    public async Task<IActionResult> GetActions([FromRoute] string number)
-    {
-        var tenantId = _tenant.TenantId;
-
-        // vw_QmsIssue_Actions sadrži: Id, IssueNumber, IssueKind, ActionTitle, DueDate, CompletedDate...
-        var rows = await _db.vw_QmsIssue_Actions
+        // actions list (vw_QmsIssue_Actions) - filtriramo po IssueNumber
+        // Napomena: vw_QmsIssue_Action entity ima polje IssueNumber (vidi tvoj OnModelCreating).
+        var actions = await _db.vw_QmsIssue_Actions
             .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.IssueNumber == number)
-            .OrderByDescending(x => x.UpdatedAt ?? x.CreatedAt)
-            .Select(x => new
+            .Where(a => a.TenantId == tenantId && a.IssueNumber == n)
+            .OrderBy(a => a.CompletedDate == null) // otvorene prve
+            .ThenBy(a => a.DueDate)
+            .Select(a => new CaseActionDto
             {
-                ActionId = x.Id,                 // <-- ključna promjena: Id = ActionId
-                x.IssueKind,
-                x.IssueNumber,
-                x.IssueTitle,
+                ActionId = a.Id,
+                ActionTitle = a.ActionTitle,
+                ActionTypeName = a.ActionTypeName,
+                ResponsibleName = a.ResponsibleName,
 
-                x.ActionTitle,
-                x.ActionDescription,
-                x.ActionTypeCode,
-                x.ActionTypeName,
+                DueDate = a.DueDate.HasValue ? a.DueDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                CompletedDate = a.CompletedDate.HasValue ? a.CompletedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                VerificationDate = a.VerificationDate.HasValue ? a.VerificationDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
 
-                x.ResponsibleName,
-                x.ResponsibleOrgUnitCode,
-                x.ResponsibleOrgUnitName,
-
-                x.DueDate,
-                x.CompletedDate,
-
-                x.EffectivenessCode,
-                x.EffectivenessName,
-
-                x.VerificationDate,
-                x.VerificationNotes,
-
-                x.CreatedAt,
-                x.UpdatedAt,
-                x.IsDeleted
+                EffectivenessCode = a.EffectivenessCode,
+                EffectivenessName = a.EffectivenessName
             })
             .ToListAsync();
 
-        return Ok(rows);
+        header.Actions = actions;
+        return Ok(header);
     }
-
-
 }
