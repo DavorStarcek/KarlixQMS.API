@@ -21,14 +21,15 @@ public class LookupsController : ControllerBase
         _tenant = tenant;
     }
 
+    // zajednički helper da svi lookupi budu konzistentni
+    private Guid TenantId => _tenant.TenantId;
+
     [HttpGet("action-types")]
     public async Task<IActionResult> GetActionTypes()
     {
-        var tenantId = _tenant.TenantId;
-
         var items = await _db.QmsActionTypes
             .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.IsActive == true)
+            .Where(x => x.TenantId == TenantId && x.IsActive == true)
             .OrderBy(x => x.DisplayOrder)
             .ThenBy(x => x.Name)
             .Select(x => new
@@ -45,11 +46,9 @@ public class LookupsController : ControllerBase
     [HttpGet("effectiveness")]
     public async Task<IActionResult> GetEffectiveness()
     {
-        var tenantId = _tenant.TenantId;
-
         var items = await _db.QmsEffectivenesses
             .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.IsActive == true)
+            .Where(x => x.TenantId == TenantId && x.IsActive == true)
             .OrderBy(x => x.DisplayOrder)
             .ThenBy(x => x.Name)
             .Select(x => new
@@ -66,11 +65,9 @@ public class LookupsController : ControllerBase
     [HttpGet("org-units")]
     public async Task<IActionResult> GetOrgUnits()
     {
-        var tenantId = _tenant.TenantId;
-
         var items = await _db.QmsOrgUnits
             .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.IsActive == true)
+            .Where(x => x.TenantId == TenantId && x.IsActive == true)
             .OrderBy(x => x.DisplayOrder)
             .ThenBy(x => x.Name)
             .Select(x => new
@@ -84,14 +81,15 @@ public class LookupsController : ControllerBase
         return Ok(items);
     }
 
+    // GET /api/lookups/workflow-statuses?entityType=COMPLAINT
     [HttpGet("workflow-statuses")]
     public async Task<IActionResult> GetWorkflowStatuses([FromQuery] string? entityType = null)
     {
-        var tenantId = _tenant.TenantId;
+        entityType = string.IsNullOrWhiteSpace(entityType) ? null : entityType.Trim();
 
         var q = _db.QmsWorkflowStatuses
             .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.IsActive == true);
+            .Where(x => x.TenantId == TenantId && x.IsActive == true);
 
         if (!string.IsNullOrWhiteSpace(entityType))
             q = q.Where(x => x.EntityType == entityType);
@@ -102,15 +100,21 @@ public class LookupsController : ControllerBase
             .ThenBy(x => x.Name)
             .Select(x => new
             {
+                x.Id,
                 x.EntityType,
                 x.Code,
                 x.Name,
                 x.Description,
-                x.DisplayOrder
+                x.DisplayOrder,
+
+                // korisno za UI (badgeovi, filteri “final/cancelled”)
+                x.IsInitial,
+                x.IsFinal,
+                x.IsCancelled,
+                x.IsActive
             })
             .ToListAsync();
 
         return Ok(items);
     }
-
 }
