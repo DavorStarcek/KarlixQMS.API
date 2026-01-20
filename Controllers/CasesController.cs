@@ -21,24 +21,24 @@ public class CasesController : ControllerBase
         _tenant = tenant;
     }
 
-    // GET /api/cases?type=COMPLAINT&status=RECEIVED&statusGroup=open&q=RIN-123&take=200
+    // GET /api/cases?type=COMPLAINT&status=RECEIVED&q=RIN-12&statusGroup=OPEN&take=200
     [HttpGet]
     public async Task<IActionResult> Get(
-        [FromQuery] string? type = null,              // COMPLAINT / NONCONFORMITY
-        [FromQuery] string? status = null,            // STATUS CODE (npr. RECEIVED, CLOSED_UNJUSTIFIED...)
-        [FromQuery] string? statusGroup = null,       // open / final / cancelled
-        [FromQuery] string? q = null,                 // search
+        [FromQuery] string? type = null,         // COMPLAINT / NONCONFORMITY
+        [FromQuery] string? status = null,       // workflow status code (npr. RECEIVED)
+        [FromQuery] string? statusGroup = null,  // OPEN / FINAL / CANCELLED
+        [FromQuery] string? q = null,            // search (number/title/customer)
         [FromQuery] int take = 200)
     {
         var tenantId = _tenant.TenantId;
 
         type = string.IsNullOrWhiteSpace(type) ? null : type.Trim();
         status = string.IsNullOrWhiteSpace(status) ? null : status.Trim();
-        statusGroup = string.IsNullOrWhiteSpace(statusGroup) ? null : statusGroup.Trim().ToLowerInvariant();
+        statusGroup = string.IsNullOrWhiteSpace(statusGroup) ? null : statusGroup.Trim().ToUpperInvariant();
         q = string.IsNullOrWhiteSpace(q) ? null : q.Trim();
         take = Math.Clamp(take, 1, 1000);
 
-        // baza: view
+        // Base: view s listom slučajeva
         var issues = _db.vw_QmsIssueLists
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId);
@@ -55,38 +55,41 @@ public class CasesController : ControllerBase
                 (x.CustomerName != null && EF.Functions.Like(x.CustomerName, pattern)));
         }
 
-        // 1) TOČAN STATUS CODE (ako je poslan, ima prednost)
+        // Ako je user odabrao konkretan status (Code), statusGroup ignoriramo
+        // (u UI-u ti već brišeš jedno kad odabereš drugo, ali ovo čuva API od “lošeg” poziva)
         if (!string.IsNullOrWhiteSpace(status))
         {
-            issues = issues.Where(x => x.StatusCode == status);
+            var code = status.ToUpperInvariant();
+
+            // filtriramo preko QmsWorkflowStatuses da bude ispravno i za RIN i UN (različiti kodovi)
+            issues = issues.Where(i =>
+                _db.QmsWorkflowStatuses.Any(ws =>
+                    ws.TenantId == tenantId &&
+                    ws.IsActive == true &&
+                    ws.Id == i.WorkflowStatusId &&
+                    ws.Code != null &&
+                    ws.Code.ToUpper() == code &&
+                    (type == null || ws.EntityType == type)));
         }
-        // 2) STATUS GROUP (semantika)
         else if (!string.IsNullOrWhiteSpace(statusGroup))
         {
-            // Dohvati skup WorkflowStatusId za ovaj tenant (+ optional type) koji spada u grupu
-            var wsQuery = _db.QmsWorkflowStatuses
-                .AsNoTracking()
-                .Where(x => x.TenantId == tenantId && x.IsActive == true);
-
-            if (!string.IsNullOrWhiteSpace(type))
-                wsQuery = wsQuery.Where(x => x.EntityType == type);
-
-            wsQuery = statusGroup switch
-            {
-                "open" => wsQuery.Where(x => x.IsFinal == false && x.IsCancelled == false),
-                "final" => wsQuery.Where(x => x.IsFinal == true && x.IsCancelled == false),
-                "cancelled" => wsQuery.Where(x => x.IsCancelled == true),
-                _ => wsQuery.Where(x => true)
-            };
-
-            var wsIds = await wsQuery.Select(x => x.Id).ToListAsync();
-            issues = issues.Where(x => wsIds.Contains(x.WorkflowStatusId));
+            // statusGroup filter preko flagova u QmsWorkflowStatuses
+            issues = issues.Where(i =>
+                _db.QmsWorkflowStatuses.Any(ws =>
+                    ws.TenantId == tenantId &&
+                    ws.IsActive == true &&
+                    ws.Id == i.WorkflowStatusId &&
+                    (type == null || ws.EntityType == type) &&
+                    (
+                        (statusGroup == "OPEN" && ws.IsFinal == false && ws.IsCancelled == false) ||
+                        (statusGroup == "FINAL" && ws.IsFinal == true) ||
+                        (statusGroup == "CANCELLED" && ws.IsCancelled == true)
+                    )));
         }
 
-        // sort: newest first (IssueDate je DateOnly u view modelu)
+        // sort: najnovije prvo (IssueDate je DateOnly u view-u)
         var items = await issues
             .OrderByDescending(x => x.IssueDate)
-            .ThenByDescending(x => x.Number)
             .Take(take)
             .Select(x => new
             {
@@ -94,10 +97,14 @@ public class CasesController : ControllerBase
                 x.Number,
                 x.EntityType,
                 x.Title,
+
                 IssueDate = x.IssueDate.ToDateTime(TimeOnly.MinValue),
                 ReceivedDate = x.ReceivedDate.HasValue ? x.ReceivedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+
                 x.CustomerName,
                 x.WorkflowStatusId,
+
+                // Ako ti view već ima StatusCode/StatusName (što pokazuješ u Webu), proslijedi ih:
                 x.StatusCode,
                 x.StatusName
             })
