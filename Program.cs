@@ -107,6 +107,7 @@ builder.Services.AddAuthorization(options =>
     static bool IsAdmin(Microsoft.AspNetCore.Authorization.AuthorizationHandlerContext ctx) =>
         ctx.User.IsInRole("GlobalAdmin") || ctx.User.IsInRole("TenantAdmin");
 
+    // ACTIONS
     options.AddPolicy(QmsPolicies.ActionsRead, p =>
         p.RequireAssertion(ctx => IsAdmin(ctx) || ctx.User.HasClaim("perm", QmsPerms.ActionsRead)));
 
@@ -115,6 +116,13 @@ builder.Services.AddAuthorization(options =>
 
     options.AddPolicy(QmsPolicies.ActionsVerify, p =>
         p.RequireAssertion(ctx => IsAdmin(ctx) || ctx.User.HasClaim("perm", QmsPerms.ActionsVerify)));
+
+    // CASES
+    options.AddPolicy(QmsPolicies.CasesRead, p =>
+        p.RequireAssertion(ctx => IsAdmin(ctx) || ctx.User.HasClaim("perm", QmsPerms.CasesRead)));
+
+    options.AddPolicy(QmsPolicies.CasesWriteBasic, p =>
+        p.RequireAssertion(ctx => IsAdmin(ctx) || ctx.User.HasClaim("perm", QmsPerms.CasesWriteBasic)));
 });
 
 //

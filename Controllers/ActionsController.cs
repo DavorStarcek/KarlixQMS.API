@@ -1,5 +1,4 @@
-﻿using System.Text.Json;
-using KarlixQMS.API.Data;
+﻿using KarlixQMS.API.Data;
 using KarlixQMS.API.Infrastructure;
 using KarlixQMS.API.Infrastructure.Security;
 using Microsoft.AspNetCore.Authorization;
@@ -24,7 +23,7 @@ public class ActionsController : ControllerBase
     }
 
     // ----------------------------
-    // DTOs (stabilni contract)
+    // DTOs
     // ----------------------------
 
     public sealed class ActionListItemDto
@@ -49,12 +48,12 @@ public class ActionsController : ControllerBase
     {
         public Guid ActionId { get; set; }
 
+        public string? Title { get; set; }
+        public string? Description { get; set; }
+
         public string? EntityType { get; set; }
         public string? EntityNumber { get; set; }
         public string? EntityTitle { get; set; }
-
-        public string? Title { get; set; }
-        public string? Description { get; set; }
 
         public DateTime? DueDate { get; set; }
         public DateTime? CompletedDate { get; set; }
@@ -65,13 +64,12 @@ public class ActionsController : ControllerBase
         public string? OrgUnitCode { get; set; }
         public string? OrgUnitName { get; set; }
 
-        // ✅ za Edit UI trebaju ID-jevi
-        public Guid ActionTypeId { get; set; }
-        public Guid? EffectivenessId { get; set; }
-
+        // ✅ OVO treba Web edit forma
+        public Guid? ActionTypeId { get; set; }
         public string? ActionTypeCode { get; set; }
         public string? ActionTypeName { get; set; }
 
+        public Guid? EffectivenessId { get; set; }
         public string? EffectivenessCode { get; set; }
         public string? EffectivenessName { get; set; }
 
@@ -79,9 +77,36 @@ public class ActionsController : ControllerBase
         public string? VerificationNotes { get; set; }
     }
 
-    // ============================================================
+    public sealed class ActionUpdateDto
+    {
+        public string? Title { get; set; }
+        public string? Description { get; set; }
+
+        public DateTime? DueDate { get; set; }
+        public DateTime? CompletedDate { get; set; }
+
+        public string? ResponsibleName { get; set; }
+        public Guid? ResponsibleOrgUnitId { get; set; }
+
+        public Guid? ActionTypeId { get; set; }
+        public Guid? EffectivenessId { get; set; }
+
+        public DateTime? VerificationDate { get; set; }
+        public string? VerificationNotes { get; set; }
+    }
+
+    // PATCH-like DTO (samo verifikacija)
+    public sealed class ActionVerificationPatchDto
+    {
+        public DateTime? VerificationDate { get; set; }
+        public string? VerificationNotes { get; set; }
+        public Guid? EffectivenessId { get; set; }
+    }
+
+    // ----------------------------
     // LISTA
-    // ============================================================
+    // GET /api/actions?openOnly=true&overdue=true&type=COMPLAINT&caseNumber=RIN-1234&awaitingVerification=true
+    // ----------------------------
     [HttpGet]
     [Authorize(Policy = QmsPolicies.ActionsRead)]
     public async Task<ActionResult<List<ActionListItemDto>>> Get(
@@ -108,6 +133,7 @@ public class ActionsController : ControllerBase
             q = q.Where(x => x.IssueNumber != null && EF.Functions.Like(x.IssueNumber, pattern));
         }
 
+        // ✅ čeka verifikaciju
         if (awaitingVerification)
         {
             q = q.Where(x => x.CompletedDate != null && x.VerificationDate == null);
@@ -160,71 +186,72 @@ public class ActionsController : ControllerBase
         return Ok(items);
     }
 
-    // ============================================================
+    // ----------------------------
     // DETAILS
-    // (JOIN tablice + view) -> daje ID-jeve za Edit UI
-    // ============================================================
+    // GET /api/actions/{id}
+    // ----------------------------
     [HttpGet("{id:guid}")]
     [Authorize(Policy = QmsPolicies.ActionsRead)]
     public async Task<ActionResult<ActionDetailsDto>> GetById([FromRoute] Guid id)
     {
         var tenantId = _tenant.TenantId;
 
-        var dto = await (
-            from a in _db.QmsIssueActions.AsNoTracking()
-            join v in _db.vw_QmsActionOverviews.AsNoTracking()
-                on a.Id equals v.ActionId
-            where a.TenantId == tenantId
-                  && a.Id == id
-                  && a.IsActive == true
-                  && a.IsDeleted == false
-                  && v.TenantId == tenantId
-                  && v.IsActive == true
+        // View daje display podatke; tablica daje ID-eve (ActionTypeId/EffectivenessId)
+        var row = await (
+            from v in _db.vw_QmsActionOverviews.AsNoTracking()
+            join a in _db.QmsIssueActions.AsNoTracking()
+                on v.ActionId equals a.Id
+            where v.TenantId == tenantId
+               && v.ActionId == id
+               && v.IsActive == true
+               && a.TenantId == tenantId
+               && a.IsActive == true
+               && a.IsDeleted == false
             select new ActionDetailsDto
             {
-                ActionId = a.Id,
+                ActionId = v.ActionId,
+
+                Title = v.ActionTitle,
+                Description = v.ActionDescription,
 
                 EntityType = v.EntityType,
                 EntityNumber = v.IssueNumber,
                 EntityTitle = v.IssueTitle,
 
-                Title = a.Title,
-                Description = a.Description,
+                DueDate = v.DueDate.HasValue ? v.DueDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                CompletedDate = v.CompletedDate.HasValue ? v.CompletedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
 
-                DueDate = a.DueDate.HasValue ? a.DueDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
-                CompletedDate = a.CompletedDate.HasValue ? a.CompletedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
-
-                ResponsibleName = a.ResponsibleName,
-
-                ResponsibleOrgUnitId = a.ResponsibleOrgUnitId,
+                ResponsibleName = v.ResponsibleName,
+                ResponsibleOrgUnitId = v.ResponsibleOrgUnitId,
                 OrgUnitCode = v.ResponsibleOrgUnitCode,
                 OrgUnitName = v.ResponsibleOrgUnitName,
 
                 ActionTypeId = a.ActionTypeId,
-                EffectivenessId = a.EffectivenessId,
-
                 ActionTypeCode = v.ActionTypeCode,
                 ActionTypeName = v.ActionTypeName,
 
+                EffectivenessId = a.EffectivenessId,
                 EffectivenessCode = v.EffectivenessCode,
                 EffectivenessName = v.EffectivenessName,
 
-                VerificationDate = a.VerificationDate.HasValue ? a.VerificationDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
-                VerificationNotes = a.VerificationNotes
-            })
-            .FirstOrDefaultAsync();
+                VerificationDate = v.VerificationDate.HasValue ? v.VerificationDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                VerificationNotes = v.VerificationNotes
+            }
+        ).FirstOrDefaultAsync();
 
-        if (dto == null)
+        if (row == null)
             return NotFound(new { Message = $"Action '{id}' nije pronađena." });
 
-        return Ok(dto);
+        return Ok(row);
     }
 
-    // ============================================================
-    // UPDATE (PATCH-like preko PUT, s razlikovanjem missing vs null)
-    // ============================================================
+    // ----------------------------
+    // UPDATE (FULL)
+    // PUT /api/actions/{id}
+    // ----------------------------
     [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update([FromRoute] Guid id, [FromBody] JsonElement payload)
+    [Authorize(Policy = QmsPolicies.ActionsWriteBasic)]
+    public async Task<IActionResult> Update([FromRoute] Guid id, [FromBody] ActionUpdateDto dto)
     {
         var tenantId = _tenant.TenantId;
 
@@ -238,155 +265,96 @@ public class ActionsController : ControllerBase
         if (action == null)
             return NotFound(new { Message = $"Action '{id}' nije pronađena." });
 
-        bool isAdminRole = User.IsInRole("GlobalAdmin") || User.IsInRole("TenantAdmin");
+        // ---- VALIDACIJE ----
+        var title = (dto.Title ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(title))
+            return BadRequest(new { Message = "Title je obavezan." });
 
-        // helpers -------------------------------------------------
-        static bool Has(JsonElement root, string name, out JsonElement value)
-        {
-            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty(name, out value))
-                return true;
-            value = default;
-            return false;
-        }
+        if (!dto.ActionTypeId.HasValue)
+            return BadRequest(new { Message = "ActionTypeId je obavezan." });
 
-        static string? GetStringOrNull(JsonElement el)
-        {
-            return el.ValueKind switch
-            {
-                JsonValueKind.Null => null,
-                JsonValueKind.String => el.GetString(),
-                _ => el.ToString()
-            };
-        }
-
-        static Guid? GetGuidOrNull(JsonElement el)
-        {
-            if (el.ValueKind == JsonValueKind.Null) return null;
-            if (el.ValueKind == JsonValueKind.String && Guid.TryParse(el.GetString(), out var g)) return g;
-            return null;
-        }
-
-        static DateTime? GetDateTimeOrNull(JsonElement el)
-        {
-            if (el.ValueKind == JsonValueKind.Null) return null;
-            if (el.ValueKind == JsonValueKind.String && DateTime.TryParse(el.GetString(), out var d)) return d;
-            return null;
-        }
-
-        static DateOnly? ToDateOnly(DateTime? dt) => dt.HasValue ? DateOnly.FromDateTime(dt.Value) : (DateOnly?)null;
-
-        // snapshot prije promjene ----------------------------------
-        var beforeTitle = action.Title;
-        var beforeDesc = action.Description;
-        var beforeDue = action.DueDate;
-        var beforeCompleted = action.CompletedDate;
-        var beforeResp = action.ResponsibleName;
-        var beforeOrg = action.ResponsibleOrgUnitId;
-        var beforeTypeId = action.ActionTypeId;
-        var beforeEff = action.EffectivenessId;
-        var beforeVerDate = action.VerificationDate;
-        var beforeVerNotes = action.VerificationNotes;
-
-        // primjena promjena (missing = ignore, null = set null) ----
-        if (Has(payload, "title", out var pTitle))
-        {
-            var t = GetStringOrNull(pTitle);
-            // title je obavezan, ako je poslan kao null/"" -> 400
-            if (string.IsNullOrWhiteSpace(t))
-                return BadRequest(new { Message = "Title je obavezan." });
-
-            action.Title = t.Trim();
-        }
-
-        if (Has(payload, "description", out var pDesc))
-        {
-            // Description je NOT NULL u bazi -> ako pošalje null, spremi "" (ili promijeni ako želiš strict 400)
-            var d = GetStringOrNull(pDesc);
-            action.Description = d ?? "";
-        }
-
-        if (Has(payload, "dueDate", out var pDue))
-        {
-            var dt = GetDateTimeOrNull(pDue);
-            action.DueDate = ToDateOnly(dt); // null -> NULL u bazi
-        }
-
-        if (Has(payload, "completedDate", out var pCompleted))
-        {
-            var dt = GetDateTimeOrNull(pCompleted);
-            action.CompletedDate = ToDateOnly(dt); // null -> NULL u bazi
-        }
-
-        if (Has(payload, "responsibleName", out var pResp))
-        {
-            action.ResponsibleName = GetStringOrNull(pResp); // null -> NULL
-        }
-
-        if (Has(payload, "responsibleOrgUnitId", out var pOrg))
-        {
-            action.ResponsibleOrgUnitId = GetGuidOrNull(pOrg); // null -> NULL
-        }
-
-        if (Has(payload, "actionTypeId", out var pTypeId))
-        {
-            var g = GetGuidOrNull(pTypeId);
-            // ActionTypeId je NOT NULL -> ako pošalje null -> 400
-            if (!g.HasValue)
-                return BadRequest(new { Message = "ActionTypeId je obavezan." });
-
-            action.ActionTypeId = g.Value;
-        }
-
-        // effectiveness/verifikacija --------------------------------
-        if (Has(payload, "effectivenessId", out var pEff))
-        {
-            action.EffectivenessId = GetGuidOrNull(pEff); // null -> NULL
-        }
-
-        if (Has(payload, "verificationDate", out var pVerDate))
-        {
-            var dt = GetDateTimeOrNull(pVerDate);
-            action.VerificationDate = ToDateOnly(dt); // null -> NULL
-        }
-
-        if (Has(payload, "verificationNotes", out var pVerNotes))
-        {
-            action.VerificationNotes = GetStringOrNull(pVerNotes); // null -> NULL
-        }
-
-        // workflow pravilo: verifikacija tek nakon completed --------
-        // (vrijedi i ako completed već postoji u bazi)
-        if (action.VerificationDate.HasValue && !action.CompletedDate.HasValue)
+        // workflow: verifikacija tek nakon completed
+        if (dto.VerificationDate.HasValue && !dto.CompletedDate.HasValue)
             return BadRequest(new { Message = "Verifikacija je moguća tek kad je radnja završena (CompletedDate)." });
 
-        // ako je radnja “un-complete”, očisti verification/effectiveness
-        if (!action.CompletedDate.HasValue)
+        var completedDateOnly = dto.CompletedDate.HasValue
+            ? DateOnly.FromDateTime(dto.CompletedDate.Value)
+            : (DateOnly?)null;
+
+        // ---- MAPIRANJE ----
+        action.Title = title;
+
+        // Description u bazi je NOT NULL:
+        action.Description = dto.Description ?? "";
+
+        action.DueDate = dto.DueDate.HasValue
+            ? DateOnly.FromDateTime(dto.DueDate.Value)
+            : (DateOnly?)null;
+
+        action.CompletedDate = completedDateOnly;
+
+        action.ResponsibleName = dto.ResponsibleName;
+        action.ResponsibleOrgUnitId = dto.ResponsibleOrgUnitId;
+
+        // ActionTypeId u bazi je NOT NULL:
+        action.ActionTypeId = dto.ActionTypeId.Value;
+
+        if (completedDateOnly == null)
         {
+            // ako se “un-complete”, očisti verifikaciju/učinkovitost
             action.EffectivenessId = null;
             action.VerificationDate = null;
             action.VerificationNotes = null;
         }
+        else
+        {
+            action.EffectivenessId = dto.EffectivenessId;
 
-        // autorizacija po promjeni ----------------------------------
-        bool basicChanged =
-            !string.Equals(beforeTitle, action.Title, StringComparison.Ordinal) ||
-            !string.Equals(beforeDesc, action.Description, StringComparison.Ordinal) ||
-            beforeDue != action.DueDate ||
-            beforeCompleted != action.CompletedDate ||
-            !string.Equals(beforeResp, action.ResponsibleName, StringComparison.Ordinal) ||
-            beforeOrg != action.ResponsibleOrgUnitId ||
-            beforeTypeId != action.ActionTypeId;
+            action.VerificationDate = dto.VerificationDate.HasValue
+                ? DateOnly.FromDateTime(dto.VerificationDate.Value)
+                : (DateOnly?)null;
 
-        bool verifyChanged =
-            beforeEff != action.EffectivenessId ||
-            beforeVerDate != action.VerificationDate ||
-            !string.Equals(beforeVerNotes, action.VerificationNotes, StringComparison.Ordinal);
+            action.VerificationNotes = dto.VerificationNotes;
+        }
 
-        if (basicChanged && !isAdminRole && !User.HasClaim("perm", QmsPerms.ActionsWriteBasic))
-            return Forbid();
+        action.UpdatedAt = DateTime.UtcNow;
 
-        if (verifyChanged && !isAdminRole && !User.HasClaim("perm", QmsPerms.ActionsVerify))
-            return Forbid();
+        await _db.SaveChangesAsync();
+        return NoContent();
+    }
+
+    // ----------------------------
+    // PATCH-like: VERIFICATION ONLY
+    // PATCH /api/actions/{id}/verification
+    // ----------------------------
+    [HttpPatch("{id:guid}/verification")]
+    [Authorize(Policy = QmsPolicies.ActionsVerify)]
+    public async Task<IActionResult> PatchVerification([FromRoute] Guid id, [FromBody] ActionVerificationPatchDto dto)
+    {
+        var tenantId = _tenant.TenantId;
+
+        var action = await _db.QmsIssueActions
+            .FirstOrDefaultAsync(x =>
+                x.TenantId == tenantId &&
+                x.Id == id &&
+                x.IsActive == true &&
+                x.IsDeleted == false);
+
+        if (action == null)
+            return NotFound(new { Message = $"Action '{id}' nije pronađena." });
+
+        // verifikacija smije tek kad je CompletedDate postavljen
+        if (action.CompletedDate == null)
+            return BadRequest(new { Message = "Verifikacija je moguća tek kad je radnja završena (CompletedDate)." });
+
+        // ✅ “null znači upiši null u bazu” (kako si rekao)
+        action.VerificationNotes = dto.VerificationNotes;
+
+        action.VerificationDate = dto.VerificationDate.HasValue
+            ? DateOnly.FromDateTime(dto.VerificationDate.Value)
+            : (DateOnly?)null;
+
+        action.EffectivenessId = dto.EffectivenessId;
 
         action.UpdatedAt = DateTime.UtcNow;
 
