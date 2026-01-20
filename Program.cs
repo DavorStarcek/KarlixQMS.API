@@ -1,10 +1,11 @@
-﻿using Microsoft.AspNetCore.Authentication;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using OpenIddict.Validation.AspNetCore;
 
 using KarlixQMS.API.Data;
 using KarlixQMS.API.Infrastructure;
+using KarlixQMS.API.Infrastructure.Security;
+using Microsoft.AspNetCore.Authorization;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -76,7 +77,6 @@ builder.Services.AddDbContext<QmsDbContext>(options =>
         sql => sql.EnableRetryOnFailure());
 });
 
-
 //
 // =========================
 // Authentication / Authorization
@@ -102,7 +102,64 @@ builder.Services.AddOpenIddict()
         options.UseAspNetCore();
     });
 
-builder.Services.AddAuthorization();
+// ✅ Permission-based authorization (perm claim)
+builder.Services.AddSingleton<IAuthorizationHandler, PermissionAuthorizationHandler>();
+
+builder.Services.AddAuthorization(options =>
+{
+    // Baseline (read)
+    options.AddPolicy(QmsPolicies.QmsRead, p =>
+    {
+        p.RequireAuthenticatedUser();
+        p.AddRequirements(new PermissionRequirement(
+            QmsPermissions.Read,
+            QmsPermissions.Admin
+        ));
+    });
+
+    // Actions read
+    options.AddPolicy(QmsPolicies.QmsActionsRead, p =>
+    {
+        p.RequireAuthenticatedUser();
+        p.AddRequirements(new PermissionRequirement(
+            QmsPermissions.ActionsRead,
+            QmsPermissions.Read,
+            QmsPermissions.Admin
+        ));
+    });
+
+    // Actions write basic
+    options.AddPolicy(QmsPolicies.QmsActionsWriteBasic, p =>
+    {
+        p.RequireAuthenticatedUser();
+        p.AddRequirements(new PermissionRequirement(
+            QmsPermissions.ActionsWriteBasic,
+            QmsPermissions.ActionsWriteAll,
+            QmsPermissions.Admin
+        ));
+    });
+
+    // Actions verify
+    options.AddPolicy(QmsPolicies.QmsActionsVerify, p =>
+    {
+        p.RequireAuthenticatedUser();
+        p.AddRequirements(new PermissionRequirement(
+            QmsPermissions.ActionsVerify,
+            QmsPermissions.ActionsWriteAll,
+            QmsPermissions.Admin
+        ));
+    });
+
+    // Actions write all
+    options.AddPolicy(QmsPolicies.QmsActionsWriteAll, p =>
+    {
+        p.RequireAuthenticatedUser();
+        p.AddRequirements(new PermissionRequirement(
+            QmsPermissions.ActionsWriteAll,
+            QmsPermissions.Admin
+        ));
+    });
+});
 
 //
 // =========================

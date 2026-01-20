@@ -1,5 +1,6 @@
 ﻿using KarlixQMS.API.Data;
 using KarlixQMS.API.Infrastructure;
+using KarlixQMS.API.Infrastructure.Security;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -14,11 +15,13 @@ public class ActionsController : ControllerBase
 {
     private readonly QmsDbContext _db;
     private readonly ITenantContext _tenant;
+    private readonly IAuthorizationService _authz;
 
-    public ActionsController(QmsDbContext db, ITenantContext tenant)
+    public ActionsController(QmsDbContext db, ITenantContext tenant, IAuthorizationService authz)
     {
         _db = db;
         _tenant = tenant;
+        _authz = authz;
     }
 
     // ----------------------------
@@ -95,6 +98,7 @@ public class ActionsController : ControllerBase
     // GET /api/actions?openOnly=true&overdue=true&type=COMPLAINT&caseNumber=RIN-1234&awaitingVerification=true
     // ----------------------------
     [HttpGet]
+    [Authorize(Policy = QmsPolicies.QmsActionsRead)]
     public async Task<ActionResult<List<ActionListItemDto>>> Get(
         [FromQuery] bool openOnly = true,
         [FromQuery] bool? overdue = null,
@@ -178,6 +182,7 @@ public class ActionsController : ControllerBase
     // GET /api/actions/{id}
     // ----------------------------
     [HttpGet("{id:guid}")]
+    [Authorize(Policy = QmsPolicies.QmsActionsRead)]
     public async Task<ActionResult<ActionDetailsDto>> GetById([FromRoute] Guid id)
     {
         var tenantId = _tenant.TenantId;
@@ -226,6 +231,7 @@ public class ActionsController : ControllerBase
     // PUT /api/actions/{id}
     // ----------------------------
     [HttpPut("{id:guid}")]
+    [Authorize(Policy = QmsPolicies.QmsActionsWriteBasic)]
     public async Task<IActionResult> Update([FromRoute] Guid id, [FromBody] ActionUpdateDto dto)
     {
         var tenantId = _tenant.TenantId;
@@ -239,6 +245,23 @@ public class ActionsController : ControllerBase
 
         if (action == null)
             return NotFound(new { Message = $"Action '{id}' nije pronađena." });
+
+        // -------------------------
+        // ✅ Granular authorization:
+        // - basic writers: mogu uređivati osnovno
+        // - verify writers: smiju upisati verifikaciju/učinkovitost
+        // -------------------------
+        var isAttemptingVerification =
+            dto.VerificationDate.HasValue ||
+            !string.IsNullOrWhiteSpace(dto.VerificationNotes) ||
+            dto.EffectivenessId.HasValue;
+
+        if (isAttemptingVerification)
+        {
+            var verifyAuth = await _authz.AuthorizeAsync(User, QmsPolicies.QmsActionsVerify);
+            if (!verifyAuth.Succeeded)
+                return Forbid();
+        }
 
         // ---- VALIDACIJE ----
         var title = (dto.Title ?? "").Trim();
@@ -283,6 +306,7 @@ public class ActionsController : ControllerBase
         }
         else
         {
+            // Napomena: ovo je verify zona; već gore enforceamo perm ako se pokušava upisati nešto od toga
             action.EffectivenessId = dto.EffectivenessId;
 
             action.VerificationDate = dto.VerificationDate.HasValue
