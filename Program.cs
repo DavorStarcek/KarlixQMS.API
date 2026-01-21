@@ -107,22 +107,43 @@ builder.Services.AddAuthorization(options =>
     static bool IsAdmin(Microsoft.AspNetCore.Authorization.AuthorizationHandlerContext ctx) =>
         ctx.User.IsInRole("GlobalAdmin") || ctx.User.IsInRole("TenantAdmin");
 
+    static bool HasPerm(Microsoft.AspNetCore.Authorization.AuthorizationHandlerContext ctx, string perm) =>
+        ctx.User.HasClaim("perm", perm);
+
+    static bool HasPermPrefix(Microsoft.AspNetCore.Authorization.AuthorizationHandlerContext ctx, string prefix) =>
+        ctx.User.Claims.Any(c =>
+            string.Equals(c.Type, "perm", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(c.Value) &&
+            c.Value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+
+    // -------------------------
     // ACTIONS
+    // -------------------------
     options.AddPolicy(QmsPolicies.ActionsRead, p =>
-        p.RequireAssertion(ctx => IsAdmin(ctx) || ctx.User.HasClaim("perm", QmsPerms.ActionsRead)));
+        p.RequireAssertion(ctx => IsAdmin(ctx) || HasPerm(ctx, QmsPerms.ActionsRead)));
 
     options.AddPolicy(QmsPolicies.ActionsWriteBasic, p =>
-        p.RequireAssertion(ctx => IsAdmin(ctx) || ctx.User.HasClaim("perm", QmsPerms.ActionsWriteBasic)));
+        p.RequireAssertion(ctx => IsAdmin(ctx) || HasPerm(ctx, QmsPerms.ActionsWriteBasic)));
 
     options.AddPolicy(QmsPolicies.ActionsVerify, p =>
-        p.RequireAssertion(ctx => IsAdmin(ctx) || ctx.User.HasClaim("perm", QmsPerms.ActionsVerify)));
+        p.RequireAssertion(ctx => IsAdmin(ctx) || HasPerm(ctx, QmsPerms.ActionsVerify)));
 
+    // -------------------------
     // CASES
+    // -------------------------
+    // Čitanje slučajeva = qms.read (ili admin)
     options.AddPolicy(QmsPolicies.CasesRead, p =>
-        p.RequireAssertion(ctx => IsAdmin(ctx) || ctx.User.HasClaim("perm", QmsPerms.CasesRead)));
+        p.RequireAssertion(ctx => IsAdmin(ctx) || HasPerm(ctx, QmsPerms.Read) || HasPerm(ctx, QmsPerms.Admin)));
 
+    // “Gate” za write na slučajevima:
+    // Admin uvijek može, a ostali ako imaju neki phase write perm (rin/un), ili qms.admin.
+    // Pravu faznu kontrolu radimo u Cases controlleru (EntityType+StatusCode -> konkretan perm).
     options.AddPolicy(QmsPolicies.CasesWriteBasic, p =>
-        p.RequireAssertion(ctx => IsAdmin(ctx) || ctx.User.HasClaim("perm", QmsPerms.CasesWriteBasic)));
+        p.RequireAssertion(ctx =>
+            IsAdmin(ctx) ||
+            HasPerm(ctx, QmsPerms.Admin) ||
+            HasPermPrefix(ctx, "qms.rin.write.") ||
+            HasPermPrefix(ctx, "qms.un.write.")));
 });
 
 //
