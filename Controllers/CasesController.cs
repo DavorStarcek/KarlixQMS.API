@@ -145,6 +145,18 @@ public class CasesController : ControllerBase
         if (header == null)
             return NotFound(new { Message = $"Case '{number}' nije pronađen." });
 
+        // ✅ NOVO: izračun faze iz WorkflowStatus-a
+        var ws = await _db.QmsWorkflowStatuses
+            .AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.IsActive == true && x.Id == header.WorkflowStatusId)
+            .Select(x => new { x.IsInitial, x.IsFinal, x.IsCancelled, x.Code })
+            .FirstOrDefaultAsync();
+
+        var phase =
+            ws?.IsFinal == true ? "CLOSED" :
+            ws?.IsInitial == true ? "RECEIVED" :
+            "IN_PROGRESS";
+
         var actions = await _db.vw_QmsIssue_Actions
             .AsNoTracking()
             .Where(a => a.TenantId == tenantId && a.IssueNumber == number)
@@ -243,6 +255,9 @@ public class CasesController : ControllerBase
             header.WorkflowStatusId,
             header.StatusCode,
             header.StatusName,
+
+            // ✅ NOVO
+            Phase = phase,
 
             Actions = actions,
 
