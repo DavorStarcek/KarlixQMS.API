@@ -1,11 +1,10 @@
-﻿using Microsoft.AspNetCore.Authentication;
+﻿using KarlixQMS.API.Data;
+using KarlixQMS.API.Infrastructure;
+using KarlixQMS.API.Infrastructure.Security;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using OpenIddict.Validation.AspNetCore;
-
-using KarlixQMS.API.Data;
-using KarlixQMS.API.Infrastructure;
-using KarlixQMS.API.Infrastructure.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -97,6 +96,7 @@ builder.Services.AddAuthentication(options =>
 builder.Services.AddOpenIddict()
     .AddValidation(options =>
     {
+        // issuer ti u tokenu izgleda kao "https://localhost:7173/"
         options.SetIssuer(authority.TrimEnd('/') + "/");
         options.UseSystemNetHttp();
         options.UseAspNetCore();
@@ -104,46 +104,45 @@ builder.Services.AddOpenIddict()
 
 builder.Services.AddAuthorization(options =>
 {
-    static bool IsAdmin(Microsoft.AspNetCore.Authorization.AuthorizationHandlerContext ctx) =>
+    static bool IsAdmin(AuthorizationHandlerContext ctx) =>
         ctx.User.IsInRole("GlobalAdmin") || ctx.User.IsInRole("TenantAdmin");
 
-    static bool HasPerm(Microsoft.AspNetCore.Authorization.AuthorizationHandlerContext ctx, string perm) =>
+    static bool HasPerm(AuthorizationHandlerContext ctx, string perm) =>
         ctx.User.HasClaim("perm", perm);
-
-    static bool HasPermPrefix(Microsoft.AspNetCore.Authorization.AuthorizationHandlerContext ctx, string prefix) =>
-        ctx.User.Claims.Any(c =>
-            string.Equals(c.Type, "perm", StringComparison.OrdinalIgnoreCase) &&
-            !string.IsNullOrWhiteSpace(c.Value) &&
-            c.Value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 
     // -------------------------
     // ACTIONS
     // -------------------------
     options.AddPolicy(QmsPolicies.ActionsRead, p =>
-        p.RequireAssertion(ctx => IsAdmin(ctx) || HasPerm(ctx, QmsPerms.ActionsRead)));
+        p.RequireAssertion(ctx =>
+            IsAdmin(ctx) ||
+            HasPerm(ctx, QmsPerms.ActionsRead)));
 
     options.AddPolicy(QmsPolicies.ActionsWriteBasic, p =>
-        p.RequireAssertion(ctx => IsAdmin(ctx) || HasPerm(ctx, QmsPerms.ActionsWriteBasic)));
+        p.RequireAssertion(ctx =>
+            IsAdmin(ctx) ||
+            HasPerm(ctx, QmsPerms.ActionsWriteBasic)));
 
     options.AddPolicy(QmsPolicies.ActionsVerify, p =>
-        p.RequireAssertion(ctx => IsAdmin(ctx) || HasPerm(ctx, QmsPerms.ActionsVerify)));
+        p.RequireAssertion(ctx =>
+            IsAdmin(ctx) ||
+            HasPerm(ctx, QmsPerms.ActionsVerify)));
 
     // -------------------------
     // CASES
     // -------------------------
-    // Čitanje slučajeva = qms.read (ili admin)
+    // Read = admin OR qms.read
     options.AddPolicy(QmsPolicies.CasesRead, p =>
-        p.RequireAssertion(ctx => IsAdmin(ctx) || HasPerm(ctx, QmsPerms.Read) || HasPerm(ctx, QmsPerms.Admin)));
+        p.RequireAssertion(ctx =>
+            IsAdmin(ctx) ||
+            HasPerm(ctx, QmsPerms.QmsRead)));
 
-    // “Gate” za write na slučajevima:
-    // Admin uvijek može, a ostali ako imaju neki phase write perm (rin/un), ili qms.admin.
-    // Pravu faznu kontrolu radimo u Cases controlleru (EntityType+StatusCode -> konkretan perm).
+    // “gate” policy za write — admin OR qms.admin
+    // Fine-grained (phase) provjeru radi controller (po trenutnom statusu)
     options.AddPolicy(QmsPolicies.CasesWriteBasic, p =>
         p.RequireAssertion(ctx =>
             IsAdmin(ctx) ||
-            HasPerm(ctx, QmsPerms.Admin) ||
-            HasPermPrefix(ctx, "qms.rin.write.") ||
-            HasPermPrefix(ctx, "qms.un.write.")));
+            HasPerm(ctx, QmsPerms.QmsAdmin)));
 });
 
 //
