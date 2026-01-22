@@ -40,12 +40,12 @@ public class ActionsController : ControllerBase
         public DateTime? CompletedDate { get; set; }
         public DateTime? VerificationDate { get; set; }
 
+        public string? StatusCode { get; set; }
+        public int? DaysLate { get; set; }
+
         // ✅ za badge
         public string? EffectivenessCode { get; set; }
         public bool? IsDeleted { get; set; }
-
-        public string? StatusCode { get; set; }
-        public int? DaysLate { get; set; }
     }
 
     public sealed class ActionDetailsDto
@@ -78,6 +78,9 @@ public class ActionsController : ControllerBase
 
         public DateTime? VerificationDate { get; set; }
         public string? VerificationNotes { get; set; }
+
+        // ✅ za badge
+        public bool? IsDeleted { get; set; }
     }
 
     public sealed class ActionUpdateDto
@@ -122,7 +125,7 @@ public class ActionsController : ControllerBase
         var tenantId = _tenant.TenantId;
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        // ✅ join na tablicu da dobijemo IsDeleted (i da budemo konzistentni s Details)
+        // view daje display podatke, QmsIssueActions daje IsDeleted
         var q =
             from v in _db.vw_QmsActionOverviews.AsNoTracking()
             join a in _db.QmsIssueActions.AsNoTracking()
@@ -133,11 +136,11 @@ public class ActionsController : ControllerBase
                && a.IsActive == true
             select new { v, a };
 
-        // default: sakrij obrisane
-        q = q.Where(x => x.a.IsDeleted == false);
-
         if (!string.IsNullOrWhiteSpace(type))
-            q = q.Where(x => x.v.EntityType == type);
+        {
+            var t = type.Trim();
+            q = q.Where(x => x.v.EntityType == t);
+        }
 
         if (!string.IsNullOrWhiteSpace(caseNumber))
         {
@@ -145,7 +148,9 @@ public class ActionsController : ControllerBase
             q = q.Where(x => x.v.IssueNumber != null && EF.Functions.Like(x.v.IssueNumber, pattern));
         }
 
-        // ✅ čeka verifikaciju
+        // u listi defaultno ne prikazujemo obrisane (ali vraćamo IsDeleted za badge/logiku)
+        q = q.Where(x => x.a.IsDeleted == false);
+
         if (awaitingVerification)
         {
             q = q.Where(x => x.v.CompletedDate != null && x.v.VerificationDate == null);
@@ -182,10 +187,6 @@ public class ActionsController : ControllerBase
                 CompletedDate = x.v.CompletedDate.HasValue ? x.v.CompletedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
                 VerificationDate = x.v.VerificationDate.HasValue ? x.v.VerificationDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
 
-                // ✅ badge
-                EffectivenessCode = x.v.EffectivenessCode,
-                IsDeleted = x.a.IsDeleted,
-
                 StatusCode =
                     awaitingVerification ? "AWAITING_VERIFICATION" :
                     (x.v.CompletedDate != null) ? "DONE" :
@@ -195,7 +196,10 @@ public class ActionsController : ControllerBase
                 DaysLate =
                     (x.v.CompletedDate == null && x.v.DueDate != null && x.v.DueDate < today)
                         ? (today.DayNumber - x.v.DueDate.Value.DayNumber)
-                        : (int?)null
+                        : (int?)null,
+
+                EffectivenessCode = x.v.EffectivenessCode,
+                IsDeleted = x.a.IsDeleted
             })
             .ToListAsync();
 
@@ -212,6 +216,7 @@ public class ActionsController : ControllerBase
     {
         var tenantId = _tenant.TenantId;
 
+        // view daje display podatke; tablica daje ID-eve (ActionTypeId/EffectivenessId) + IsDeleted
         var row = await (
             from v in _db.vw_QmsActionOverviews.AsNoTracking()
             join a in _db.QmsIssueActions.AsNoTracking()
@@ -220,8 +225,8 @@ public class ActionsController : ControllerBase
                && v.ActionId == id
                && v.IsActive == true
                && a.TenantId == tenantId
+               && a.Id == id
                && a.IsActive == true
-               && a.IsDeleted == false
             select new ActionDetailsDto
             {
                 ActionId = v.ActionId,
@@ -250,7 +255,9 @@ public class ActionsController : ControllerBase
                 EffectivenessName = v.EffectivenessName,
 
                 VerificationDate = v.VerificationDate.HasValue ? v.VerificationDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
-                VerificationNotes = v.VerificationNotes
+                VerificationNotes = v.VerificationNotes,
+
+                IsDeleted = a.IsDeleted
             }
         ).FirstOrDefaultAsync();
 
