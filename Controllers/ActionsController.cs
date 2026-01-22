@@ -40,6 +40,10 @@ public class ActionsController : ControllerBase
         public DateTime? CompletedDate { get; set; }
         public DateTime? VerificationDate { get; set; }
 
+        // ✅ za badge
+        public string? EffectivenessCode { get; set; }
+        public bool? IsDeleted { get; set; }
+
         public string? StatusCode { get; set; }
         public int? DaysLate { get; set; }
     }
@@ -64,7 +68,6 @@ public class ActionsController : ControllerBase
         public string? OrgUnitCode { get; set; }
         public string? OrgUnitName { get; set; }
 
-        // ✅ OVO treba Web edit forma
         public Guid? ActionTypeId { get; set; }
         public string? ActionTypeCode { get; set; }
         public string? ActionTypeName { get; set; }
@@ -95,7 +98,6 @@ public class ActionsController : ControllerBase
         public string? VerificationNotes { get; set; }
     }
 
-    // PATCH-like DTO (samo verifikacija)
     public sealed class ActionVerificationPatchDto
     {
         public DateTime? VerificationDate { get; set; }
@@ -120,65 +122,79 @@ public class ActionsController : ControllerBase
         var tenantId = _tenant.TenantId;
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        var q = _db.vw_QmsActionOverviews
-            .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.IsActive == true);
+        // ✅ join na tablicu da dobijemo IsDeleted (i da budemo konzistentni s Details)
+        var q =
+            from v in _db.vw_QmsActionOverviews.AsNoTracking()
+            join a in _db.QmsIssueActions.AsNoTracking()
+                on v.ActionId equals a.Id
+            where v.TenantId == tenantId
+               && v.IsActive == true
+               && a.TenantId == tenantId
+               && a.IsActive == true
+            select new { v, a };
+
+        // default: sakrij obrisane
+        q = q.Where(x => x.a.IsDeleted == false);
 
         if (!string.IsNullOrWhiteSpace(type))
-            q = q.Where(x => x.EntityType == type);
+            q = q.Where(x => x.v.EntityType == type);
 
         if (!string.IsNullOrWhiteSpace(caseNumber))
         {
             var pattern = $"%{caseNumber.Trim()}%";
-            q = q.Where(x => x.IssueNumber != null && EF.Functions.Like(x.IssueNumber, pattern));
+            q = q.Where(x => x.v.IssueNumber != null && EF.Functions.Like(x.v.IssueNumber, pattern));
         }
 
         // ✅ čeka verifikaciju
         if (awaitingVerification)
         {
-            q = q.Where(x => x.CompletedDate != null && x.VerificationDate == null);
+            q = q.Where(x => x.v.CompletedDate != null && x.v.VerificationDate == null);
         }
         else
         {
             if (openOnly)
-                q = q.Where(x => x.CompletedDate == null);
+                q = q.Where(x => x.v.CompletedDate == null);
 
             if (overdue.HasValue)
             {
                 if (overdue.Value)
-                    q = q.Where(x => x.CompletedDate == null && x.DueDate != null && x.DueDate < today);
+                    q = q.Where(x => x.v.CompletedDate == null && x.v.DueDate != null && x.v.DueDate < today);
                 else
-                    q = q.Where(x => x.CompletedDate == null && (x.DueDate == null || x.DueDate >= today));
+                    q = q.Where(x => x.v.CompletedDate == null && (x.v.DueDate == null || x.v.DueDate >= today));
             }
         }
 
         var items = await q
-            .OrderBy(x => x.DueDate == null)
-            .ThenBy(x => x.DueDate)
+            .OrderBy(x => x.v.DueDate == null)
+            .ThenBy(x => x.v.DueDate)
             .Take(Math.Clamp(take, 1, 1000))
             .Select(x => new ActionListItemDto
             {
-                ActionId = x.ActionId,
-                IssueNumber = x.IssueNumber,
-                EntityType = x.EntityType,
+                ActionId = x.v.ActionId,
+                IssueNumber = x.v.IssueNumber,
+                EntityType = x.v.EntityType,
 
-                ActionTitle = x.ActionTitle,
-                ActionTypeName = x.ActionTypeName,
-                ResponsibleName = x.ResponsibleName,
+                ActionTitle = x.v.ActionTitle,
+                ActionTypeName = x.v.ActionTypeName,
+                ResponsibleName = x.v.ResponsibleName,
 
-                DueDate = x.DueDate.HasValue ? x.DueDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
-                CompletedDate = x.CompletedDate.HasValue ? x.CompletedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
-                VerificationDate = x.VerificationDate.HasValue ? x.VerificationDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                DueDate = x.v.DueDate.HasValue ? x.v.DueDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                CompletedDate = x.v.CompletedDate.HasValue ? x.v.CompletedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+                VerificationDate = x.v.VerificationDate.HasValue ? x.v.VerificationDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
+
+                // ✅ badge
+                EffectivenessCode = x.v.EffectivenessCode,
+                IsDeleted = x.a.IsDeleted,
 
                 StatusCode =
                     awaitingVerification ? "AWAITING_VERIFICATION" :
-                    (x.CompletedDate != null) ? "DONE" :
-                    (x.CompletedDate == null && x.DueDate != null && x.DueDate < today) ? "OVERDUE" :
+                    (x.v.CompletedDate != null) ? "DONE" :
+                    (x.v.CompletedDate == null && x.v.DueDate != null && x.v.DueDate < today) ? "OVERDUE" :
                     "IN_PROGRESS",
 
                 DaysLate =
-                    (x.CompletedDate == null && x.DueDate != null && x.DueDate < today)
-                        ? (today.DayNumber - x.DueDate.Value.DayNumber)
+                    (x.v.CompletedDate == null && x.v.DueDate != null && x.v.DueDate < today)
+                        ? (today.DayNumber - x.v.DueDate.Value.DayNumber)
                         : (int?)null
             })
             .ToListAsync();
@@ -196,7 +212,6 @@ public class ActionsController : ControllerBase
     {
         var tenantId = _tenant.TenantId;
 
-        // View daje display podatke; tablica daje ID-eve (ActionTypeId/EffectivenessId)
         var row = await (
             from v in _db.vw_QmsActionOverviews.AsNoTracking()
             join a in _db.QmsIssueActions.AsNoTracking()
@@ -265,7 +280,6 @@ public class ActionsController : ControllerBase
         if (action == null)
             return NotFound(new { Message = $"Action '{id}' nije pronađena." });
 
-        // ---- VALIDACIJE ----
         var title = (dto.Title ?? "").Trim();
         if (string.IsNullOrWhiteSpace(title))
             return BadRequest(new { Message = "Title je obavezan." });
@@ -273,7 +287,6 @@ public class ActionsController : ControllerBase
         if (!dto.ActionTypeId.HasValue)
             return BadRequest(new { Message = "ActionTypeId je obavezan." });
 
-        // workflow: verifikacija tek nakon completed
         if (dto.VerificationDate.HasValue && !dto.CompletedDate.HasValue)
             return BadRequest(new { Message = "Verifikacija je moguća tek kad je radnja završena (CompletedDate)." });
 
@@ -281,10 +294,7 @@ public class ActionsController : ControllerBase
             ? DateOnly.FromDateTime(dto.CompletedDate.Value)
             : (DateOnly?)null;
 
-        // ---- MAPIRANJE ----
         action.Title = title;
-
-        // Description u bazi je NOT NULL:
         action.Description = dto.Description ?? "";
 
         action.DueDate = dto.DueDate.HasValue
@@ -296,12 +306,10 @@ public class ActionsController : ControllerBase
         action.ResponsibleName = dto.ResponsibleName;
         action.ResponsibleOrgUnitId = dto.ResponsibleOrgUnitId;
 
-        // ActionTypeId u bazi je NOT NULL:
         action.ActionTypeId = dto.ActionTypeId.Value;
 
         if (completedDateOnly == null)
         {
-            // ako se “un-complete”, očisti verifikaciju/učinkovitost
             action.EffectivenessId = null;
             action.VerificationDate = null;
             action.VerificationNotes = null;
@@ -343,11 +351,9 @@ public class ActionsController : ControllerBase
         if (action == null)
             return NotFound(new { Message = $"Action '{id}' nije pronađena." });
 
-        // verifikacija smije tek kad je CompletedDate postavljen
         if (action.CompletedDate == null)
             return BadRequest(new { Message = "Verifikacija je moguća tek kad je radnja završena (CompletedDate)." });
 
-        // ✅ “null znači upiši null u bazu” (kako si rekao)
         action.VerificationNotes = dto.VerificationNotes;
 
         action.VerificationDate = dto.VerificationDate.HasValue
