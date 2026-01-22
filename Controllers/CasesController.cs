@@ -173,7 +173,8 @@ public class CasesController : ControllerBase
                 CompletedDate = a.CompletedDate.HasValue ? a.CompletedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
                 VerificationDate = a.VerificationDate.HasValue ? a.VerificationDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
                 a.EffectivenessCode,
-                a.EffectivenessName
+                a.EffectivenessName,
+                a.IsDeleted
             })
             .ToListAsync();
 
