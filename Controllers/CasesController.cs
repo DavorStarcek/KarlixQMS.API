@@ -22,6 +22,25 @@ public class CasesController : ControllerBase
         _tenant = tenant;
     }
 
+    // ----------------------------
+    // DTOs
+    // ----------------------------
+    public sealed class CaseTransitionDto
+    {
+        public string? ToStatusCode { get; set; } // npr. RECEIVED / IN_PROGRESS / CLOSED / CANCELLED (ovisno o šifrarniku)
+    }
+
+    // ----------------------------
+    // helpers
+    // ----------------------------
+    private static string PhaseFromFlags(bool isInitial, bool isFinal, bool isCancelled)
+    {
+        if (isCancelled) return "CANCELLED";
+        if (isFinal) return "CLOSED";
+        if (isInitial) return "RECEIVED";
+        return "IN_PROGRESS";
+    }
+
     // ============================================================
     // LIST
     // GET /api/cases?type=COMPLAINT&status=RECEIVED&q=RIN-12&statusGroup=OPEN&take=200
@@ -145,17 +164,15 @@ public class CasesController : ControllerBase
         if (header == null)
             return NotFound(new { Message = $"Case '{number}' nije pronađen." });
 
-        // ✅ NOVO: izračun faze iz WorkflowStatus-a
         var ws = await _db.QmsWorkflowStatuses
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.IsActive == true && x.Id == header.WorkflowStatusId)
             .Select(x => new { x.IsInitial, x.IsFinal, x.IsCancelled, x.Code })
             .FirstOrDefaultAsync();
 
-        var phase =
-            ws?.IsFinal == true ? "CLOSED" :
-            ws?.IsInitial == true ? "RECEIVED" :
-            "IN_PROGRESS";
+        var phase = ws == null
+            ? "IN_PROGRESS"
+            : PhaseFromFlags(ws.IsInitial, ws.IsFinal, ws.IsCancelled);
 
         var actions = await _db.vw_QmsIssue_Actions
             .AsNoTracking()
@@ -257,13 +274,144 @@ public class CasesController : ControllerBase
             header.StatusCode,
             header.StatusName,
 
-            // ✅ NOVO
             Phase = phase,
 
             Actions = actions,
 
             Complaint = complaint,
             Nonconformity = nonconformity
+        });
+    }
+
+    // ============================================================
+    // WORKFLOW TRANSITION
+    // POST /api/cases/{number}/transition
+    // Body: { "toStatusCode": "..." }
+    // ============================================================
+    [HttpPost("{number}/transition")]
+    [Authorize(Policy = QmsPolicies.CasesWriteBasic)]
+    public async Task<IActionResult> Transition([FromRoute] string number, [FromBody] CaseTransitionDto dto)
+    {
+        if (string.IsNullOrWhiteSpace(number))
+            return BadRequest(new { Message = "Number is required." });
+
+        var toCode = (dto?.ToStatusCode ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(toCode))
+            return BadRequest(new { Message = "ToStatusCode je obavezan." });
+
+        var tenantId = _tenant.TenantId;
+        number = number.Trim();
+        toCode = toCode.ToUpperInvariant();
+
+        // header iz view-a: ovdje dobiješ EntityId (to je QmsIssue.Id)
+        var header = await _db.vw_QmsIssueLists
+            .AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.Number == number)
+            .Select(x => new { x.EntityId, x.Number, x.EntityType, x.WorkflowStatusId })
+            .FirstOrDefaultAsync();
+
+        if (header == null)
+            return NotFound(new { Message = $"Case '{number}' nije pronađen." });
+
+        var entityType = (header.EntityType ?? "").Trim().ToUpperInvariant();
+        if (entityType != "COMPLAINT" && entityType != "NONCONFORMITY")
+            return BadRequest(new { Message = "Nepoznat EntityType za slučaj." });
+
+        // current status
+        var current = await _db.QmsWorkflowStatuses
+            .AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.IsActive == true && x.Id == header.WorkflowStatusId)
+            .Select(x => new { x.Id, x.Code, x.IsInitial, x.IsFinal, x.IsCancelled })
+            .FirstOrDefaultAsync();
+
+        if (current == null)
+            return BadRequest(new { Message = "Trenutni workflow status nije pronađen." });
+
+        // target status
+        var target = await _db.QmsWorkflowStatuses
+            .AsNoTracking()
+            .Where(x =>
+                x.TenantId == tenantId &&
+                x.IsActive == true &&
+                x.EntityType == entityType &&
+                x.Code.ToUpper() == toCode)
+            .Select(x => new { x.Id, x.Code, x.Name, x.IsInitial, x.IsFinal, x.IsCancelled })
+            .FirstOrDefaultAsync();
+
+        if (target == null)
+            return BadRequest(new { Message = $"Ciljani status '{toCode}' ne postoji za '{entityType}'." });
+
+        // no-op
+        if (target.Id == current.Id)
+            return NoContent();
+
+        // basic rules: nema prijelaza iz CANCELLED ili FINAL
+        if (current.IsCancelled)
+            return BadRequest(new { Message = "Slučaj je otkazan. Nije dopuštena promjena statusa." });
+
+        if (current.IsFinal)
+            return BadRequest(new { Message = "Slučaj je završen. Nije dopuštena promjena statusa." });
+
+        var currentPhase = PhaseFromFlags(current.IsInitial, current.IsFinal, current.IsCancelled);
+        var targetPhase = PhaseFromFlags(target.IsInitial, target.IsFinal, target.IsCancelled);
+
+        // allowed transitions:
+        // - RECEIVED -> IN_PROGRESS
+        // - IN_PROGRESS -> CLOSED
+        // - (RECEIVED|IN_PROGRESS) -> CANCELLED
+        var allowed =
+            (currentPhase == "RECEIVED" && targetPhase == "IN_PROGRESS") ||
+            (currentPhase == "IN_PROGRESS" && targetPhase == "CLOSED") ||
+            ((currentPhase == "RECEIVED" || currentPhase == "IN_PROGRESS") && targetPhase == "CANCELLED");
+
+        if (!allowed)
+        {
+            return BadRequest(new
+            {
+                Message = $"Nedopuštena tranzicija: {currentPhase} -> {targetPhase} (status {current.Code} -> {target.Code})."
+            });
+        }
+
+        // business rule: kod zatvaranja provjeri otvorene radnje
+        if (targetPhase == "CLOSED")
+        {
+            var hasOpenActions = await _db.vw_QmsIssue_Actions
+                .AsNoTracking()
+                .AnyAsync(a =>
+                    a.TenantId == tenantId &&
+                    a.IssueNumber == number &&
+                    a.IsDeleted == false &&
+                    a.CompletedDate == null);
+
+            if (hasOpenActions)
+            {
+                return BadRequest(new
+                {
+                    Message = "Ne može se zatvoriti slučaj dok postoje otvorene radnje (CompletedDate nije postavljen)."
+                });
+            }
+        }
+
+        // ✅ update canonical table: QmsIssue po Id (EntityId iz view-a)
+        var issue = await _db.QmsIssues
+            .FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == header.EntityId);
+
+        if (issue == null)
+            return BadRequest(new { Message = "QmsIssue zapis nije pronađen (ne mogu spremiti status)." });
+
+        issue.WorkflowStatusId = target.Id;
+        issue.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync();
+
+        return Ok(new
+        {
+            Number = number,
+            EntityType = entityType,
+            FromStatusCode = current.Code,
+            ToStatusCode = target.Code,
+            ToStatusName = target.Name,
+            Phase = targetPhase
         });
     }
 }
