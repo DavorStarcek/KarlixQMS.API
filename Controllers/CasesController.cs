@@ -27,7 +27,7 @@ public class CasesController : ControllerBase
     // ----------------------------
     public sealed class CaseTransitionDto
     {
-        public string? ToStatusCode { get; set; } // npr. RECEIVED / IN_PROGRESS / CLOSED / CANCELLED (ovisno o šifrarniku)
+        public string? ToStatusCode { get; set; } // npr. IN_PROGRESS / CLOSED / CANCELLED (ovisno o šifrarniku)
     }
 
     // ----------------------------
@@ -41,6 +41,58 @@ public class CasesController : ControllerBase
         return "IN_PROGRESS";
     }
 
+    private bool HasPerm(string perm)
+    {
+        if (string.IsNullOrWhiteSpace(perm)) return false;
+
+        if (User.Claims.Any(c =>
+                (c.Type == "perm" || c.Type == "permissions" || c.Type == "permission") &&
+                string.Equals(c.Value, perm, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        var scope = User.Claims.FirstOrDefault(c => c.Type == "scope")?.Value;
+        if (!string.IsNullOrWhiteSpace(scope))
+        {
+            var parts = scope.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (parts.Any(p => string.Equals(p, perm, StringComparison.OrdinalIgnoreCase)))
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool IsQmsAdmin() => HasPerm(QmsPerms.QmsAdmin);
+
+    private string? RequiredWritePerm(string entityType, string phase)
+    {
+        entityType = (entityType ?? "").Trim().ToUpperInvariant();
+        phase = (phase ?? "").Trim().ToUpperInvariant();
+
+        if (entityType == "COMPLAINT")
+        {
+            return phase switch
+            {
+                "RECEIVED" => QmsPerms.RinWriteReceived,
+                "IN_PROGRESS" => QmsPerms.RinWriteInProgress,
+                "CLOSED" => QmsPerms.RinWriteClosed,
+                _ => null
+            };
+        }
+
+        if (entityType == "NONCONFORMITY")
+        {
+            return phase switch
+            {
+                "RECEIVED" => QmsPerms.UnWriteReceived,
+                "IN_PROGRESS" => QmsPerms.UnWriteInProgress,
+                "CLOSED" => QmsPerms.UnWriteClosed,
+                _ => null
+            };
+        }
+
+        return null;
+    }
+
     // ============================================================
     // LIST
     // GET /api/cases?type=COMPLAINT&status=RECEIVED&q=RIN-12&statusGroup=OPEN&take=200
@@ -48,10 +100,10 @@ public class CasesController : ControllerBase
     [HttpGet]
     [Authorize(Policy = QmsPolicies.CasesRead)]
     public async Task<IActionResult> Get(
-        [FromQuery] string? type = null,         // COMPLAINT / NONCONFORMITY
-        [FromQuery] string? status = null,       // workflow status code (npr. RECEIVED)
-        [FromQuery] string? statusGroup = null,  // OPEN / FINAL / CANCELLED
-        [FromQuery] string? q = null,            // search (number/title/customer)
+        [FromQuery] string? type = null,
+        [FromQuery] string? status = null,
+        [FromQuery] string? statusGroup = null,
+        [FromQuery] string? q = null,
         [FromQuery] int take = 200)
     {
         var tenantId = _tenant.TenantId;
@@ -115,10 +167,8 @@ public class CasesController : ControllerBase
                 x.Number,
                 x.EntityType,
                 x.Title,
-
                 IssueDate = x.IssueDate.ToDateTime(TimeOnly.MinValue),
                 ReceivedDate = x.ReceivedDate.HasValue ? x.ReceivedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
-
                 x.CustomerName,
                 x.WorkflowStatusId,
                 x.StatusCode,
@@ -209,21 +259,16 @@ public class CasesController : ControllerBase
                 {
                     x.Id,
                     x.Number,
-
                     x.Title,
                     x.Description,
                     x.Analysis,
                     x.RootCause,
                     x.ImmediateCorrection,
-
                     x.IsComplaintJustified,
                     x.FeedbackToCustomer,
-
                     x.CustomerName,
                     x.ProductName,
-
                     x.OrgUnitId,
-
                     ClosedDate = x.ClosedDate.HasValue ? x.ClosedDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null
                 })
                 .FirstOrDefaultAsync();
@@ -237,24 +282,18 @@ public class CasesController : ControllerBase
                 {
                     x.Id,
                     x.Number,
-
                     x.Title,
                     x.Description,
-
                     x.RootCause,
                     x.Cause,
                     x.ImmediateCorrection,
                     x.CorrectiveAction,
                     x.PreventiveAction,
-
                     x.OrgUnitId,
-
                     DueDate = x.DueDate.HasValue ? x.DueDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
                     CloseDate = x.CloseDate.HasValue ? x.CloseDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
-
                     VerificationDate = x.VerificationDate.HasValue ? x.VerificationDate.Value.ToDateTime(TimeOnly.MinValue) : (DateTime?)null,
                     x.VerifiedBy,
-
                     x.EffectivenessId,
                     x.EffectivenessComment
                 })
@@ -273,11 +312,8 @@ public class CasesController : ControllerBase
             header.WorkflowStatusId,
             header.StatusCode,
             header.StatusName,
-
             Phase = phase,
-
             Actions = actions,
-
             Complaint = complaint,
             Nonconformity = nonconformity
         });
@@ -303,11 +339,10 @@ public class CasesController : ControllerBase
         number = number.Trim();
         toCode = toCode.ToUpperInvariant();
 
-        // header iz view-a: ovdje dobiješ EntityId (to je QmsIssue.Id)
         var header = await _db.vw_QmsIssueLists
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.Number == number)
-            .Select(x => new { x.EntityId, x.Number, x.EntityType, x.WorkflowStatusId })
+            .Select(x => new { x.Number, x.EntityType, x.WorkflowStatusId, x.EntityId })
             .FirstOrDefaultAsync();
 
         if (header == null)
@@ -317,17 +352,18 @@ public class CasesController : ControllerBase
         if (entityType != "COMPLAINT" && entityType != "NONCONFORMITY")
             return BadRequest(new { Message = "Nepoznat EntityType za slučaj." });
 
-        // current status
         var current = await _db.QmsWorkflowStatuses
             .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.IsActive == true && x.Id == header.WorkflowStatusId)
+            .Where(x =>
+                x.TenantId == tenantId &&
+                x.IsActive == true &&
+                x.Id == header.WorkflowStatusId)
             .Select(x => new { x.Id, x.Code, x.IsInitial, x.IsFinal, x.IsCancelled })
             .FirstOrDefaultAsync();
 
         if (current == null)
             return BadRequest(new { Message = "Trenutni workflow status nije pronađen." });
 
-        // target status
         var target = await _db.QmsWorkflowStatuses
             .AsNoTracking()
             .Where(x =>
@@ -341,11 +377,9 @@ public class CasesController : ControllerBase
         if (target == null)
             return BadRequest(new { Message = $"Ciljani status '{toCode}' ne postoji za '{entityType}'." });
 
-        // no-op
         if (target.Id == current.Id)
             return NoContent();
 
-        // basic rules: nema prijelaza iz CANCELLED ili FINAL
         if (current.IsCancelled)
             return BadRequest(new { Message = "Slučaj je otkazan. Nije dopuštena promjena statusa." });
 
@@ -355,10 +389,6 @@ public class CasesController : ControllerBase
         var currentPhase = PhaseFromFlags(current.IsInitial, current.IsFinal, current.IsCancelled);
         var targetPhase = PhaseFromFlags(target.IsInitial, target.IsFinal, target.IsCancelled);
 
-        // allowed transitions:
-        // - RECEIVED -> IN_PROGRESS
-        // - IN_PROGRESS -> CLOSED
-        // - (RECEIVED|IN_PROGRESS) -> CANCELLED
         var allowed =
             (currentPhase == "RECEIVED" && targetPhase == "IN_PROGRESS") ||
             (currentPhase == "IN_PROGRESS" && targetPhase == "CLOSED") ||
@@ -372,7 +402,16 @@ public class CasesController : ControllerBase
             });
         }
 
-        // business rule: kod zatvaranja provjeri otvorene radnje
+        // AUTHZ (API source-of-truth)
+        if (!IsQmsAdmin())
+        {
+            var required = RequiredWritePerm(entityType, currentPhase);
+            if (string.IsNullOrWhiteSpace(required) || !HasPerm(required))
+            {
+                return StatusCode(403, new { Message = $"Nemate pravo za promjenu statusa u fazi {currentPhase} ({entityType})." });
+            }
+        }
+
         if (targetPhase == "CLOSED")
         {
             var hasOpenActions = await _db.vw_QmsIssue_Actions
@@ -392,7 +431,7 @@ public class CasesController : ControllerBase
             }
         }
 
-        // ✅ update canonical table: QmsIssue po Id (EntityId iz view-a)
+        // QmsIssue nema Number => update preko Id
         var issue = await _db.QmsIssues
             .FirstOrDefaultAsync(x => x.TenantId == tenantId && x.Id == header.EntityId);
 
