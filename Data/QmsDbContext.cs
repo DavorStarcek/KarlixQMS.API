@@ -40,6 +40,8 @@ public partial class QmsDbContext : DbContext
 
     public virtual DbSet<QmsIssueAttachment> QmsIssueAttachments { get; set; }
 
+    public virtual DbSet<QmsIssueHistory> QmsIssueHistories { get; set; }
+
     public virtual DbSet<QmsIssueLink> QmsIssueLinks { get; set; }
 
     public virtual DbSet<QmsNonconformity> QmsNonconformities { get; set; }
@@ -445,6 +447,19 @@ public partial class QmsDbContext : DbContext
                 .HasForeignKey(d => d.IssueId)
                 .OnDelete(DeleteBehavior.ClientSetNull)
                 .HasConstraintName("FK_QmsIssueAttachment_Issue");
+        });
+
+        modelBuilder.Entity<QmsIssueHistory>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("PK__QmsIssue__3214EC07C39DA0A1");
+
+            entity.ToTable("QmsIssueHistory");
+
+            entity.Property(e => e.Id).ValueGeneratedNever();
+            entity.Property(e => e.ChangedByName).HasMaxLength(200);
+            entity.Property(e => e.FromStatusCode).HasMaxLength(50);
+            entity.Property(e => e.Phase).HasMaxLength(30);
+            entity.Property(e => e.ToStatusCode).HasMaxLength(50);
         });
 
         modelBuilder.Entity<QmsIssueLink>(entity =>
