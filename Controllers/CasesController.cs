@@ -283,11 +283,14 @@ public class CasesController : ControllerBase
 
     // ============================================================
     // HISTORY
-    // GET /api/cases/{number}/history
+    // GET /api/cases/{number}/history?take=200&phase=CLOSED
     // ============================================================
     [HttpGet("{number}/history")]
     [Authorize(Policy = QmsPolicies.CasesRead)]
-    public async Task<IActionResult> GetHistory([FromRoute] string number, [FromQuery] int take = 200)
+    public async Task<IActionResult> GetHistory(
+        [FromRoute] string number,
+        [FromQuery] int take = 200,
+        [FromQuery] string? phase = null)
     {
         if (string.IsNullOrWhiteSpace(number))
             return BadRequest(new { Message = "Number is required." });
@@ -295,8 +298,9 @@ public class CasesController : ControllerBase
         var tenantId = _tenant.TenantId;
         number = number.Trim();
         take = Math.Clamp(take, 1, 1000);
+        phase = string.IsNullOrWhiteSpace(phase) ? null : phase.Trim().ToUpperInvariant();
 
-        // pronađi issueId (QmsIssue) preko broja (header EntityId je complaint/nonconformity id)
+        // header: EntityId = complaint/nonconformity id
         var header = await _db.vw_QmsIssueLists
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.Number == number)
@@ -308,6 +312,7 @@ public class CasesController : ControllerBase
 
         var entityType = (header.EntityType ?? "").Trim().ToUpperInvariant();
 
+        // issueId (QmsIssue) preko ComplaintId/NonconformityId
         var issueQuery = _db.QmsIssues
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.EntityType == entityType);
@@ -322,9 +327,14 @@ public class CasesController : ControllerBase
         if (issueId == Guid.Empty)
             return Ok(new List<object>());
 
-        var items = await _db.QmsIssueHistories
+        var q = _db.QmsIssueHistories
             .AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.IssueId == issueId)
+            .Where(x => x.TenantId == tenantId && x.IssueId == issueId);
+
+        if (!string.IsNullOrWhiteSpace(phase))
+            q = q.Where(x => x.Phase != null && x.Phase.ToUpper() == phase);
+
+        var items = await q
             .OrderByDescending(x => x.ChangedAt)
             .Take(take)
             .Select(x => new
@@ -333,7 +343,7 @@ public class CasesController : ControllerBase
                 x.FromStatusCode,
                 x.ToStatusCode,
                 x.Phase,
-                x.ChangedAt,
+                x.ChangedAt,          // UTC
                 x.ChangedByUserId,
                 x.ChangedByName
             })
@@ -345,7 +355,6 @@ public class CasesController : ControllerBase
     // ============================================================
     // WORKFLOW TRANSITION
     // POST /api/cases/{number}/transition
-    // Body: { "toStatusCode": "..." }
     // ============================================================
     [HttpPost("{number}/transition")]
     [Authorize(Policy = QmsPolicies.CasesWriteBasic)]
@@ -362,7 +371,6 @@ public class CasesController : ControllerBase
         number = number.Trim();
         toCode = toCode.ToUpperInvariant();
 
-        // header iz view-a (EntityId = ComplaintId/NonconformityId!)
         var header = await _db.vw_QmsIssueLists
             .AsNoTracking()
             .Where(x => x.TenantId == tenantId && x.Number == number)
@@ -443,7 +451,6 @@ public class CasesController : ControllerBase
             }
         }
 
-        // ✅ pronađi QmsIssue: preko ComplaintId/NonconformityId (EntityId iz view-a)
         var issueQuery = _db.QmsIssues.Where(x => x.TenantId == tenantId && x.EntityType == entityType);
 
         if (entityType == "COMPLAINT")
@@ -456,10 +463,8 @@ public class CasesController : ControllerBase
         if (issue == null)
             return BadRequest(new { Message = "QmsIssue zapis nije pronađen (ne mogu spremiti status)." });
 
-        // history row
         var changedById = User.TryGetUserId();
         var changedByName = User.TryGetDisplayName();
-
         var changedAtUtc = DateTime.UtcNow;
 
         _db.QmsIssueHistories.Add(new Models.Tables.QmsIssueHistory
@@ -475,13 +480,11 @@ public class CasesController : ControllerBase
             ChangedByName = changedByName
         });
 
-        // update
         issue.WorkflowStatusId = target.Id;
         issue.UpdatedAt = changedAtUtc;
         issue.UpdatedByUserId = changedById;
 
         await _db.SaveChangesAsync();
-
 
         return Ok(new
         {
